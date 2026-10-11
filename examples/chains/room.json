@@ -1,0 +1,13 @@
+{
+  "effects": [
+    {
+      "effect": "reverb",
+      "params": {
+        "room": 0.4,
+        "damp": 0.5,
+        "width": 0.7,
+        "mix": 0.18
+      }
+    }
+  ]
+}
