@@ -9,8 +9,8 @@ use eframe::egui::{
     TextStyle, Vec2, Visuals,
 };
 use sp404_core::{
-    chain_presets, decode_wav, effect_schema, effect_schemas, encode_wav, render, ChainDesc,
-    Engine, PadView, ParamScale, ParamSchema, PAD_COUNT,
+    chain_presets, decode_wav, effect_schema, effect_schemas, encode_wav, ingest_take, render,
+    ChainDesc, Engine, PadView, ParamScale, ParamSchema, TakeOptions, PAD_COUNT,
 };
 
 use crate::audio::{self, Session};
@@ -48,9 +48,17 @@ pub struct SamplerApp {
     edit_bus: bool,
     status: String,
     meter: f32,
+    input_meter: f32,
     path: String,
     hover_pad: Option<usize>,
     import_json: String,
+    /// True records the mic. False records the engine master.
+    record_input: bool,
+    trim_silence: bool,
+    /// Pad armed for the take that is currently recording.
+    record_pad: Option<usize>,
+    /// Source chosen when the current take was armed.
+    armed_input: bool,
 }
 
 pub fn apply_style(ctx: &egui::Context) {
@@ -115,9 +123,14 @@ impl SamplerApp {
             edit_bus: false,
             status: "Demo bank loaded. Keys 1–4, Q–R, A–F, Z–V trigger pads. Drop a WAV on a pad to load it.".into(),
             meter: 0.0,
+            input_meter: 0.0,
             path: String::new(),
             hover_pad: None,
             import_json: String::new(),
+            record_input: true,
+            trim_silence: true,
+            record_pad: None,
+            armed_input: true,
         }
     }
 
@@ -201,6 +214,110 @@ impl SamplerApp {
                     .and_then(|stem| stem.to_str())
                     .unwrap_or("sample");
                 self.load_bytes(&bytes, name, pad);
+            }
+            Err(err) => self.status = format!("Error: {err}"),
+        }
+    }
+
+    fn arm_record(&mut self) {
+        let result = if self.record_input {
+            self.session.start_input_record()
+        } else {
+            self.session.start_resample_record()
+        };
+        match result {
+            Ok(()) => {
+                self.record_pad = Some(self.selected);
+                self.armed_input = self.record_input;
+                let source = if self.record_input {
+                    "input"
+                } else {
+                    "resample"
+                };
+                self.status = format!("Recording {source} onto pad {}", self.selected + 1);
+            }
+            Err(err) => self.status = format!("Error: {err}"),
+        }
+    }
+
+    fn commit_take(&mut self) {
+        let pad = self.record_pad.take().unwrap_or(self.selected);
+        let from_input = self.armed_input;
+        let raw = match self.session.stop_record() {
+            Ok(raw) => raw,
+            Err(err) => {
+                self.status = format!("Error: {err}");
+                return;
+            }
+        };
+        let target_rate = self.engine().sample_rate();
+        let options = TakeOptions {
+            target_rate,
+            trim_silence: self.trim_silence,
+            ..TakeOptions::default()
+        };
+        let ingested = ingest_take(raw.sample_rate, raw.channels, &raw.samples, options);
+        let buffer = match ingested {
+            Ok(buffer) => buffer,
+            Err(err) => {
+                self.status = format!("Error: {err}");
+                return;
+            }
+        };
+        let label = if from_input { "Input" } else { "Resample" };
+        let loaded = self.engine().load_pad(pad, buffer, label);
+        if let Err(err) = loaded {
+            self.status = format!("Error: {err}");
+            return;
+        }
+        let ranged = self.engine().set_pad_range(pad, 0.0, 1.0);
+        if let Err(err) = ranged {
+            self.status = format!("Error: {err}");
+            return;
+        }
+        self.selected = pad;
+        self.edit_bus = false;
+        let cap = if raw.capped {
+            " Stopped at the 60 second cap."
+        } else {
+            ""
+        };
+        self.status = format!(
+            "Recorded {label} onto pad {}.{} Save WAV writes pad404-take-{:02}.wav for a plan.",
+            pad + 1,
+            cap,
+            pad + 1
+        );
+    }
+
+    fn save_sample(&mut self) {
+        let sample = {
+            let engine = self.engine();
+            match engine.pad_sample(self.selected) {
+                Ok(sample) => sample,
+                Err(err) => {
+                    drop(engine);
+                    self.status = format!("Error: {err}");
+                    return;
+                }
+            }
+        };
+        let Some(sample) = sample else {
+            self.status = "Selected pad has no sample to save".into();
+            return;
+        };
+        match encode_wav(&sample) {
+            Ok(bytes) => {
+                let path = format!("pad404-take-{:02}.wav", self.selected + 1);
+                match std::fs::write(&path, bytes) {
+                    Ok(()) => {
+                        self.status = format!(
+                            "Wrote {path}. In a plan: {{\"kind\":\"file\",\"path\":\"{path}\"}} on pad {}.",
+                            self.selected + 1
+                        );
+                    }
+                    Err(err) => self.status = format!("Error: {err}"),
+                }
             }
             Err(err) => self.status = format!("Error: {err}"),
         }
@@ -296,8 +413,10 @@ impl eframe::App for SamplerApp {
         self.handle_keys(ctx);
         let snap = self.snapshot();
         let block_peak = f32::from_bits(self.session.peak.load(Ordering::Relaxed));
+        let input_peak = self.session.input_level();
         let dt = ctx.input(|input| input.stable_dt).clamp(0.0, 0.1);
         self.meter = (self.meter * (-3.5 * dt).exp()).max(block_peak);
+        self.input_meter = (self.input_meter * (-8.0 * dt).exp()).max(input_peak);
 
         self.header(ctx, &snap);
         self.footer(ctx, &snap);
@@ -429,11 +548,15 @@ impl SamplerApp {
                         let response = draw_pad(
                             ui,
                             Vec2::splat(size),
-                            KEY_LABELS[index],
-                            &pad.name,
-                            pad.has_sample,
-                            pad.active,
-                            index == self.selected,
+                            PadFace {
+                                key: KEY_LABELS[index],
+                                name: &pad.name,
+                                loaded: pad.has_sample,
+                                active: pad.active,
+                                selected: index == self.selected,
+                                recording: self.session.recording()
+                                    && self.record_pad == Some(index),
+                            },
                         );
                         if response.hovered() {
                             self.hover_pad = Some(index);
@@ -508,6 +631,7 @@ impl SamplerApp {
             let result = self.engine().set_pad_range(self.selected, start, end);
             self.note_err(result);
         }
+        self.record_panel(ui);
         ui.horizontal(|ui| {
             if ui.button("Clear pad").clicked() {
                 let result = self.engine().clear_pad(self.selected);
@@ -517,6 +641,109 @@ impl SamplerApp {
             if ui.button("Render WAV").clicked() {
                 self.bounce();
             }
+        });
+    }
+
+    fn record_panel(&mut self, ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Record").strong().color(CREAM));
+                if self.session.recording() {
+                    ui.label(
+                        RichText::new("REC")
+                            .strong()
+                            .color(Color32::from_rgb(255, 72, 64)),
+                    );
+                }
+            });
+            let recording = self.session.recording();
+            ui.add_enabled_ui(!recording, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(self.record_input, "Input").clicked() {
+                        self.record_input = true;
+                    }
+                    if ui
+                        .selectable_label(!self.record_input, "Resample")
+                        .clicked()
+                    {
+                        self.record_input = false;
+                    }
+                });
+            });
+            if self.record_input {
+                let names: Vec<String> = self
+                    .session
+                    .inputs()
+                    .iter()
+                    .map(|device| device.name.clone())
+                    .collect();
+                let current = self.session.selected_input();
+                let label = current
+                    .and_then(|index| names.get(index))
+                    .cloned()
+                    .unwrap_or_else(|| "No input device".into());
+                let mut picked = None;
+                egui::ComboBox::from_id_salt("input-device")
+                    .selected_text(label)
+                    .show_ui(ui, |ui| {
+                        if names.is_empty() {
+                            ui.label("No input device");
+                        }
+                        for (index, name) in names.iter().enumerate() {
+                            if ui.selectable_label(current == Some(index), name).clicked() {
+                                picked = Some(index);
+                            }
+                        }
+                    });
+                if let Some(index) = picked {
+                    if let Err(err) = self.session.select_input(index) {
+                        self.status = format!("Error: {err}");
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Refresh").clicked() {
+                        match self.session.refresh_inputs() {
+                            Ok(()) => {
+                                let count = self.session.inputs().len();
+                                self.status = format!("Found {count} input device(s)");
+                            }
+                            Err(err) => self.status = format!("Error: {err}"),
+                        }
+                    }
+                    ui.label("Level");
+                    meter(ui, self.input_meter);
+                });
+                if let Some(err) = self.session.input_error() {
+                    ui.label(
+                        RichText::new(err)
+                            .small()
+                            .color(Color32::from_rgb(255, 140, 120)),
+                    );
+                }
+            } else {
+                ui.label(
+                    RichText::new("Records the engine master back onto this pad.")
+                        .small()
+                        .color(DIM),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Level");
+                    meter(ui, self.meter);
+                });
+            }
+            ui.checkbox(&mut self.trim_silence, "Auto-trim silence");
+            ui.horizontal(|ui| {
+                if recording {
+                    if ui.button("Stop").clicked() {
+                        self.commit_take();
+                    }
+                } else if ui.button("Record").clicked() {
+                    self.arm_record();
+                }
+                if ui.button("Save WAV").clicked() {
+                    self.save_sample();
+                }
+            });
         });
     }
 
@@ -692,19 +919,20 @@ fn preset(id: &str) -> Option<ChainDesc> {
         .and_then(|preset| ChainDesc::from_json(preset.chain_json).ok())
 }
 
-fn draw_pad(
-    ui: &mut egui::Ui,
-    size: Vec2,
-    key: &str,
-    name: &str,
+struct PadFace<'a> {
+    key: &'a str,
+    name: &'a str,
     loaded: bool,
     active: bool,
     selected: bool,
-) -> egui::Response {
+    recording: bool,
+}
+
+fn draw_pad(ui: &mut egui::Ui, size: Vec2, face: PadFace<'_>) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let mut fill = if active {
+    let mut fill = if face.active {
         Color32::from_rgb(255, 176, 72)
-    } else if loaded {
+    } else if face.loaded {
         Color32::from_rgb(186, 84, 32)
     } else {
         Color32::from_rgb(48, 38, 34)
@@ -714,7 +942,14 @@ fn draw_pad(
     }
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(12), fill);
-    if selected {
+    if face.recording {
+        painter.rect_stroke(
+            rect.shrink(1.0),
+            CornerRadius::same(12),
+            Stroke::new(3.0, Color32::from_rgb(255, 64, 56)),
+            StrokeKind::Inside,
+        );
+    } else if face.selected {
         painter.rect_stroke(
             rect.shrink(1.0),
             CornerRadius::same(12),
@@ -722,22 +957,22 @@ fn draw_pad(
             StrokeKind::Inside,
         );
     }
-    let text = if active { INK } else { CREAM };
+    let text = if face.active { INK } else { CREAM };
     painter.text(
         rect.left_top() + Vec2::new(10.0, 8.0),
         Align2::LEFT_TOP,
-        key,
+        face.key,
         FontId::monospace(13.0),
-        if active {
+        if face.active {
             Color32::from_rgb(80, 40, 16)
         } else {
             Color32::from_rgb(255, 214, 180)
         },
     );
-    let label = if name.is_empty() {
+    let label = if face.name.is_empty() {
         "Empty".to_string()
     } else {
-        name.to_string()
+        face.name.to_string()
     };
     painter.text(
         rect.center() + Vec2::new(0.0, 6.0),

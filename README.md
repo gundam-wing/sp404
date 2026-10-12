@@ -154,6 +154,39 @@ Implement `Effect` and either `EffectChain::push` the box, or `Registry::registe
 
 The UI loads a demo bank (kick, snare, hats, toms, bass, and a few tones) so it is playable before any file is dropped. Drop a WAV on a pad, or type a path. WAV reading supports PCM 8/16/24/32-bit and float 32-bit, mono or stereo.
 
+### Recording
+
+Device capture stays in `sp404-ui`. `sp404-core` only accepts interleaved frames:
+
+```rust
+ingest_take(sample_rate, channels, &frames, TakeOptions {
+    target_rate: engine.sample_rate(),
+    trim_silence: true,
+    ..TakeOptions::default()
+})?;
+engine.load_pad(pad, buffer, "Input")?;
+engine.set_pad_range(pad, 0.0, 1.0)?;
+```
+
+`ingest_take` maps channels, optionally trims silence, and resamples to the engine rate. One channel is copied to both sides. Two or more channels keep the first pair. A take that is entirely under the trim threshold (default `0.002`) is kept whole. Non-finite samples become zero. The same call records a resample: pass the interleaved stereo from `Engine::process` (the UI does this from the output callback, or from the silent clock when no output device is present).
+
+In the window, select a pad and open **Record** in the inspector.
+
+- **Input** lists capture devices from `cpal` and selects the host default. **Refresh** re-reads the list. The level meter follows the open input even while idle. **Record** / **Stop** commits the take onto that pad, resampling if the device rate differs. A missing device or a permission error is shown in the panel; the window stays open.
+- **Resample** records the engine master (pads, bus, master gain) back onto the pad.
+- **Auto-trim silence** drops leading and trailing quiet, keeping a short pre-roll and post-roll.
+- Takes stop at 60 seconds. **Save WAV** writes the pad sample (not the effected bounce) to `pad404-take-NN.wav`.
+
+On macOS, a binary from `cargo run` has no `Info.plist`, so the system attributes microphone permission to the app that launched cargo (Terminal, iTerm, Cursor). Grant it under System Settings → Privacy & Security → Microphone. `NSMicrophoneUsageDescription` is only required once the sampler is bundled as an `.app`. A permission denial from the host is surfaced with that note.
+
+A saved take is a normal WAV. Point a plan at it and the CLI inlines the file before rendering. Paths are relative to the plan file:
+
+```json
+{ "pad": 0, "sample": { "kind": "file", "path": "pad404-take-01.wav" } }
+```
+
+The core validates the path and refuses to open it, which keeps `wasm32` free of filesystem calls. `sp404 plan validate` and `sp404 plan render` resolve the path, decode the WAV, and replace the source with inline PCM.
+
 ### WASM boundary
 
 `sp404-core` is the wasm crate. It does not use threads, `std::fs`, audio devices, or dialogs. `sp404-cli` and `sp404-ui` are the native edges (`cpal`, the filesystem, the window).
@@ -162,7 +195,9 @@ The UI loads a demo bank (kick, snare, hats, toms, bass, and a few tones) so it 
 cargo build -p sp404-core --target wasm32-unknown-unknown
 ```
 
-A later `wasm-bindgen` wrapper can export `catalog_json`, `render_json`, and `encode_wav` without changing the effect model. The UI is native in this pass; the same engine calls are what a browser shell would make.
+A later `wasm-bindgen` wrapper can export `catalog_json`, `render_json`, `encode_wav`, and `ingest_take` without changing the effect model. The UI is native in this pass; the same engine calls are what a browser shell would make.
+
+A browser build does not link `cpal`. `getUserMedia({ audio: true })` yields a `MediaStream`. An AudioWorklet (or a `ScriptProcessorNode`) copies each render quantum into an interleaved `Float32` buffer and posts `{ channels, sampleRate, samples }` to the wasm host. The host calls `ingest_take` with `target_rate` set to `engine.sample_rate()`, then `Engine::load_pad`. Recording the master is the same ingest of the interleaved stereo from `Engine::process`. Device enumeration, the permission prompt, and the level meter stay in the page. No core change is required.
 
 ## Run
 
@@ -176,7 +211,7 @@ cargo run -p sp404-cli -- plan render examples/plans/filter-sweep.json --output 
 cargo run -p sp404-ui
 ```
 
-In the window, keys `1–4`, `Q–R`, `A–F`, `Z–V` trigger the pads. Space retriggers the selected pad. The chain editor targets either that pad or the bus. **Render WAV** bounces the selected pad through its insert chain and the bus to `pad404-padNN.wav`.
+In the window, keys `1–4`, `Q–R`, `A–F`, `Z–V` trigger the pads. Space retriggers the selected pad. The chain editor targets either that pad or the bus. **Record** arms the selected pad from the input device or from the engine master; **Save WAV** writes that sample to `pad404-take-NN.wav`. **Render WAV** bounces the selected pad through its insert chain and the bus to `pad404-padNN.wav`.
 
 If no output device is present, the window still opens and a silent clock keeps the engine running. Render from the CLI to hear a file.
 
@@ -194,6 +229,9 @@ If no output device is present, the window still opens and a silent clock keeps 
 - a custom effect registered beside the built-ins
 - the CLI catalog and a demo render to a WAV file
 - arrangement JSON round-trips, and bad plans fail validation
+- a plan can name a WAV with `{ "kind": "file", "path" }`; the CLI inlines it, and a missing file fails validation
+- recorded buffers: channel mapping, resampling, silence trim, non-finite samples, and loading the result onto a pad
+- the UI capture path appends only while armed, caps a take at 60 seconds, and a resample through the session clock becomes a pad sample
 - effect memory snapshots restore bit-exactly
 - `render(plan, start..end)` matches a full render for fresh chunking, cursor chunking, checkpoint boundaries, and random slices in shuffled order
 
@@ -201,7 +239,7 @@ If no output device is present, the window still opens and a silent clock keeps 
 
 - A scrub view in the UI on `PlanRenderer`: the checkpoints are already the seek index.
 - MIDI in, and recording a performance back into an arrangement.
-- Record from the input device onto a pad.
+- A browser shell that posts `getUserMedia` blocks into `ingest_take`.
 - More SP-style processors once the chain format is in use: cassette, a DJ looper, a brickwall limiter.
 - Smoothed parameters on the live UI. Arrangement automation is already evaluated per frame.
 - A `wasm-bindgen` crate and a browser shell over the same `catalog_json` / `render_json` API.

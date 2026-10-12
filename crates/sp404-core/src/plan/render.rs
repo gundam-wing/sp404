@@ -243,6 +243,12 @@ fn load_engine(plan: &Arrangement) -> Result<Engine, Error> {
                 let buffer = AudioBuffer::new(*sample_rate, u16::from(*channels), samples.clone())?;
                 (buffer, format!("pad {}", pad.pad))
             }
+            SampleSource::File { path } => {
+                return Err(invalid(format!(
+                    "pad {} references '{path}', which the host must inline before rendering",
+                    pad.pad
+                )));
+            }
         };
         engine.load_pad(pad.pad, buffer, name)?;
         engine.set_pad_range(pad.pad, pad.start, pad.end)?;
