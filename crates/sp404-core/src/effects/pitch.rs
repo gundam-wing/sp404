@@ -1,6 +1,8 @@
 use crate::dsp::{read_frac, sanitize, wet_dry};
 use crate::effect::{impl_effect_accessors, Effect};
 use crate::param::{EffectSchema, ParamScale, ParamSchema};
+use crate::state::{EffectState, Reader, Writer};
+use crate::Error;
 
 const NONE: &[&str] = &[];
 const WINDOW: f32 = 2_048.0;
@@ -63,6 +65,30 @@ impl Head {
         self.write = 0;
         self.delay_a = 1.0;
         self.delay_b = 1.0 + WINDOW * 0.5;
+    }
+
+    fn capture(&self, writer: &mut Writer) {
+        writer.u(self.write as u32);
+        writer.u(self.buf.len() as u32);
+        writer.f(self.delay_a);
+        writer.f(self.delay_b);
+        writer.samples(&self.buf);
+    }
+
+    fn restore(&mut self, reader: &mut Reader<'_>) -> Option<()> {
+        let write = reader.u()? as usize;
+        let len = reader.u()? as usize;
+        let delay_a = reader.f()?;
+        let delay_b = reader.f()?;
+        let buf = reader.samples(len)?.to_vec();
+        if len == 0 || write >= len {
+            return None;
+        }
+        self.write = write;
+        self.delay_a = delay_a;
+        self.delay_b = delay_b;
+        self.buf = buf;
+        Some(())
     }
 
     fn process(&mut self, input: f32, ratio: f32) -> f32 {
@@ -147,5 +173,29 @@ impl Effect for Pitch {
     fn reset(&mut self) {
         self.left.reset();
         self.right.reset();
+    }
+
+    fn capture_state(&self) -> EffectState {
+        let mut writer = Writer::new();
+        self.left.capture(&mut writer);
+        self.right.capture(&mut writer);
+        writer.finish()
+    }
+
+    fn restore_state(&mut self, state: &EffectState) -> Result<(), Error> {
+        let mut reader = Reader::new(state);
+        self.left.restore(&mut reader).ok_or_else(bad_state)?;
+        self.right.restore(&mut reader).ok_or_else(bad_state)?;
+        if !reader.finish() {
+            return Err(bad_state());
+        }
+        Ok(())
+    }
+}
+
+fn bad_state() -> Error {
+    Error::StateMismatch {
+        effect: "pitch".into(),
+        reason: "snapshot does not match a pitch shifter".into(),
     }
 }

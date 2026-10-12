@@ -1,6 +1,8 @@
 use crate::dsp::{wet_dry, Svf};
 use crate::effect::{impl_effect_accessors, Effect};
 use crate::param::{EffectSchema, ParamScale, ParamSchema};
+use crate::state::{EffectState, Reader, Writer};
+use crate::Error;
 
 const NONE: &[&str] = &[];
 
@@ -110,5 +112,37 @@ impl Effect for Filter {
     fn reset(&mut self) {
         self.left.reset();
         self.right.reset();
+    }
+
+    fn capture_state(&self) -> EffectState {
+        let mut writer = Writer::new();
+        for channel in [self.left.capture(), self.right.capture()] {
+            writer.f(channel[0]);
+            writer.f(channel[1]);
+        }
+        writer.finish()
+    }
+
+    fn restore_state(&mut self, state: &EffectState) -> Result<(), Error> {
+        let mut reader = Reader::new(state);
+        let mut left = [0.0; 2];
+        let mut right = [0.0; 2];
+        left[0] = reader.f().ok_or_else(bad_state)?;
+        left[1] = reader.f().ok_or_else(bad_state)?;
+        right[0] = reader.f().ok_or_else(bad_state)?;
+        right[1] = reader.f().ok_or_else(bad_state)?;
+        if !reader.finish() {
+            return Err(bad_state());
+        }
+        self.left.restore(left);
+        self.right.restore(right);
+        Ok(())
+    }
+}
+
+fn bad_state() -> Error {
+    Error::StateMismatch {
+        effect: "filter".into(),
+        reason: "snapshot does not match a filter".into(),
     }
 }

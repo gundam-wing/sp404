@@ -85,6 +85,15 @@ impl Svf {
         self.ic2eq = 0.0;
     }
 
+    pub(crate) fn capture(&self) -> [f32; 2] {
+        [self.ic1eq, self.ic2eq]
+    }
+
+    pub(crate) fn restore(&mut self, state: [f32; 2]) {
+        self.ic1eq = state[0];
+        self.ic2eq = state[1];
+    }
+
     pub(crate) fn process(
         &mut self,
         input: f32,
@@ -128,6 +137,14 @@ impl OnePole {
 
     pub(crate) fn reset(&mut self) {
         self.z = 0.0;
+    }
+
+    pub(crate) fn z(&self) -> f32 {
+        self.z
+    }
+
+    pub(crate) fn set_z(&mut self, z: f32) {
+        self.z = z;
     }
 
     pub(crate) fn split(&mut self, x: f32, cutoff: f32, sample_rate: f32) -> (f32, f32) {

@@ -9,14 +9,16 @@ The point of the layout is that the sound is a library. The window is only one c
 | Crate | Role |
 | --- | --- |
 | `sp404-core` | Effects, chains, the 16-pad engine, offline render, WAV encode/decode. No threads, devices, or filesystem. |
-| `sp404-cli` | `sp404` binary. Prints the catalog and renders a WAV from a chain file. |
+| `sp404-cli` | `sp404` binary. Prints the catalog and renders a WAV from a chain or an arrangement. |
 | `sp404-ui` | Native egui window and `cpal` output. This is the only crate that talks to the sound device. |
 
 ```mermaid
 flowchart LR
   agent["Agent or CLI"] --> catalog["catalog JSON"]
   agent --> chain["ChainDesc JSON"]
+  agent --> plan["Arrangement JSON"]
   chain --> core["sp404-core"]
+  plan --> core
   ui["sp404-ui"] --> core
   core --> effects["Effect chain"]
   ui --> device["cpal output"]
@@ -96,6 +98,52 @@ sp404 render --demo kick --chain examples/chains/dub-delay.json --output kick.wa
 
 From Rust, the same path is `AudioBuffer::demo`, `render_json`, and `encode_wav`. The pad engine is also headless: load samples, `trigger`, and `process`, or pass `NoteEvent`s to `render_performance`.
 
+### Arrangements are a pure function of time
+
+An [`Arrangement`](crates/sp404-core/src/plan/mod.rs) is the piece itself: which demo or PCM sits on each pad, when each pad fires (seconds or beats at a tempo), the insert and bus chains, and a curve for any parameter. The same document is JSON and a Rust value. [`PlanBuilder`](crates/sp404-core/src/plan/mod.rs) is the in-code way to write one; `Arrangement::to_json` is what an agent diffs.
+
+```rust
+use sp404_core::plan::{beats, chain, effect, Ease, Keyframe, PlanBuilder, Target, Track};
+use sp404_core::Error;
+
+fn sweep() -> Result<(), Error> {
+    let sweep = PlanBuilder::new(44_100, 100.0)
+        .duration(beats(4.0))
+        .pad_demo(0, "kick")
+        .trigger(0, beats(0.0))
+        .bus_chain(chain([effect("filter", [("cutoff", 280.0), ("mix", 1.0)])]))
+        .automate(
+            Target::bus(0, "cutoff"),
+            Track::keyframes([
+                Keyframe::at(beats(0.0), 280.0),
+                Keyframe::at(beats(4.0), 7200.0).ease(Ease::Smooth),
+            ]),
+        )
+        .finish()?;
+    let frames = sweep.duration_frames()?;
+    let _audio = sweep.render(0, frames)?;
+    Ok(())
+}
+```
+
+Automation is closed form. A keyframe curve, an LFO, and a spring are functions of absolute time: sampling second 1.5 does not depend on having sampled second 1.4. The spring is the analytic damped oscillator released at a time with zero velocity (`bounce` 0 is critically damped), not a simulation stepped from the previous frame. Ease curves are `linear`, `hold`, `smooth`, `in`, `out`, and `in_out`. An LFO is `sine`, `triangle`, `square`, or `hold` (one deterministic value per cycle). Every effect parameter is automatable, and so are pad volume, pad pitch, and the master gain. The catalog says so: each parameter has `"automatable": true`, and `arrangement.tracks` lists the curve kinds.
+
+The audio path is a recurrence. A delay line at frame 10_000 depends on the frames before it, so the output is not a closed form. It is still a pure function of `(plan, frame range)`. The renderer steps one frame at a time: fire the triggers whose rounded frame is this one, evaluate every track at `frame / sample_rate`, then run the engine for that single frame. Caller chunk size never changes the recurrence.
+
+To start at an arbitrary frame, the renderer restores a checkpoint and replays. Checkpoint `C` is the voice positions and effect memory *before* frame `C`, and `C` is always a multiple of 4096 frames (including 0). The snapshot is an exact copy of filter states, envelopes, delay lines, and playback heads. It is derived from the plan, so a cache only saves work. Rendering the whole piece, or arbitrary slices in any order, follows the same per-frame transition and writes the same sample bits.
+
+Feedback effects stay on this one implementation. A delay with feedback is not a lookback over the dry signal; the delayed copy contains the effect's own past. A second stateless formula for the reverb would be a second instrument. Replaying the recurrence from a checkpoint keeps one instrument and makes a later scrub view possible: seek by restoring the nearest checkpoint and replaying at most 4096 frames.
+
+`ChainDesc` is unchanged. A chain file still renders through `sp404 render`. An arrangement composes those chains over time.
+
+```bash
+sp404 plan validate examples/plans/filter-sweep.json
+sp404 plan render examples/plans/filter-sweep.json --output sweep.wav
+sp404 plan render examples/plans/dub-throw.json --output throw.wav --start-beat 2 --end-beat 4
+```
+
+[`examples/plans/filter-sweep.json`](examples/plans/filter-sweep.json) is a four-beat pattern with a low-pass opening across the bar. [`examples/plans/dub-throw.json`](examples/plans/dub-throw.json) keeps the snare delay closed until the last hit, then opens the mix. From Rust, `Arrangement::from_json` and `Arrangement::render(start, end)` are the same calls. Neither opens a file.
+
 ### Extending the set
 
 Implement `Effect` and either `EffectChain::push` the box, or `Registry::register` it under a schema. A later registration with the same id shadows the built-in, so a host can replace `filter` without changing the JSON shape. `Registry::builtin()` is what the CLI and UI use.
@@ -124,6 +172,7 @@ Rust 1.88 or newer.
 cargo test --workspace
 cargo run -p sp404-cli -- catalog
 cargo run -p sp404-cli -- render --demo kick --chain examples/chains/dub-delay.json --output kick.wav
+cargo run -p sp404-cli -- plan render examples/plans/filter-sweep.json --output sweep.wav
 cargo run -p sp404-ui
 ```
 
@@ -144,12 +193,16 @@ If no output device is present, the window still opens and a silent clock keeps 
 - WAV round-trip, mono-to-stereo render, pad playback, and a short performance bounce
 - a custom effect registered beside the built-ins
 - the CLI catalog and a demo render to a WAV file
+- arrangement JSON round-trips, and bad plans fail validation
+- effect memory snapshots restore bit-exactly
+- `render(plan, start..end)` matches a full render for fresh chunking, cursor chunking, checkpoint boundaries, and random slices in shuffled order
 
 ## Next steps
 
-- MIDI in, and a pattern sequencer that records `NoteEvent`s.
+- A scrub view in the UI on `PlanRenderer`: the checkpoints are already the seek index.
+- MIDI in, and recording a performance back into an arrangement.
 - Record from the input device onto a pad.
 - More SP-style processors once the chain format is in use: cassette, a DJ looper, a brickwall limiter.
-- Smoothed parameters so automating cutoff does not zipper.
+- Smoothed parameters on the live UI. Arrangement automation is already evaluated per frame.
 - A `wasm-bindgen` crate and a browser shell over the same `catalog_json` / `render_json` API.
 - An MCP server that is a thin wrapper around the catalog and the render functions. The JSON document is already the contract.

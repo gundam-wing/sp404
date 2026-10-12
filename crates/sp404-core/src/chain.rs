@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::dsp::sane_sr;
 use crate::effect::{Effect, Registry};
+use crate::state::EffectState;
 use crate::Error;
 
 /// One effect slot in a serializable chain.
@@ -118,6 +119,32 @@ impl EffectChain {
             .get_mut(index)
             .ok_or(Error::EffectOutOfRange { index })?;
         effect.set_bypassed(bypassed);
+        Ok(())
+    }
+
+    /// Copy every slot's delay lines and filter memory, in chain order.
+    pub(crate) fn capture_state(&self) -> Vec<EffectState> {
+        self.effects
+            .iter()
+            .map(|effect| effect.capture_state())
+            .collect()
+    }
+
+    /// Restore a snapshot taken from a chain with the same slots.
+    pub(crate) fn restore_state(&mut self, states: &[EffectState]) -> Result<(), Error> {
+        if states.len() != self.effects.len() {
+            return Err(Error::StateMismatch {
+                effect: "chain".into(),
+                reason: format!(
+                    "expected {} effects, snapshot has {}",
+                    self.effects.len(),
+                    states.len()
+                ),
+            });
+        }
+        for (effect, state) in self.effects.iter_mut().zip(states) {
+            effect.restore_state(state)?;
+        }
         Ok(())
     }
 

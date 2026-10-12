@@ -1,0 +1,70 @@
+{
+  "name": "dub-throw",
+  "version": 1,
+  "sample_rate": 44100,
+  "tempo": 92,
+  "duration": { "beats": 4 },
+  "pads": [
+    { "pad": 0, "sample": { "kind": "demo", "name": "kick" } },
+    {
+      "pad": 1,
+      "sample": { "kind": "demo", "name": "snare" },
+      "chain": {
+        "effects": [
+          {
+            "effect": "delay",
+            "params": {
+              "time_ms": 490,
+              "feedback": 0.62,
+              "tone": 0.35,
+              "ping_pong": 0.85,
+              "mix": 0
+            }
+          }
+        ]
+      },
+      "automation": [
+        {
+          "effect": 0,
+          "param": "mix",
+          "track": {
+            "kind": "keyframes",
+            "keys": [
+              { "at": { "beats": 0 }, "value": 0 },
+              { "at": { "beats": 2.75 }, "value": 0, "ease": "hold" },
+              { "at": { "beats": 3.05 }, "value": 0.72, "ease": "smooth" },
+              { "at": { "beats": 4 }, "value": 0.22, "ease": "out" }
+            ]
+          }
+        }
+      ]
+    },
+    { "pad": 2, "sample": { "kind": "demo", "name": "hat" } }
+  ],
+  "bus": {
+    "chain": {
+      "effects": [
+        {
+          "effect": "reverb",
+          "params": { "room": 0.45, "damp": 0.5, "width": 0.8, "mix": 0.16 }
+        }
+      ]
+    }
+  },
+  "triggers": [
+    { "pad": 0, "at": { "beats": 0 } },
+    { "pad": 0, "at": { "beats": 1 } },
+    { "pad": 0, "at": { "beats": 2 } },
+    { "pad": 0, "at": { "beats": 3 } },
+    { "pad": 1, "at": { "beats": 1 } },
+    { "pad": 1, "at": { "beats": 3 } },
+    { "pad": 2, "at": { "beats": 0 } },
+    { "pad": 2, "at": { "beats": 0.5 } },
+    { "pad": 2, "at": { "beats": 1 } },
+    { "pad": 2, "at": { "beats": 1.5 } },
+    { "pad": 2, "at": { "beats": 2 } },
+    { "pad": 2, "at": { "beats": 2.5 } },
+    { "pad": 2, "at": { "beats": 3 } },
+    { "pad": 2, "at": { "beats": 3.5 } }
+  ]
+}

@@ -8,6 +8,7 @@
 
 use crate::buffer::AudioBuffer;
 use crate::chain::{ChainDesc, EffectChain};
+use crate::state::EffectState;
 use crate::Error;
 
 /// Pads in one bank. Matches the classic 4×4 layout.
@@ -91,6 +92,24 @@ impl Pad {
             chain: self.chain.to_desc(),
         }
     }
+}
+
+/// Voice position and effect memory for one engine.
+///
+/// Samples, chains, and parameter values are not included. The arrangement
+/// renderer reapplies those from the plan before the next frame.
+#[derive(Clone, Debug)]
+pub(crate) struct PlaybackState {
+    pads: Vec<PadVoice>,
+    bus: Vec<EffectState>,
+}
+
+#[derive(Clone, Debug)]
+struct PadVoice {
+    phase: u8,
+    pos_bits: u64,
+    tail_left: u32,
+    chain: Vec<EffectState>,
 }
 
 /// The sampler: sixteen pads, a bus chain, and a master gain.
@@ -371,6 +390,58 @@ impl Engine {
             *slot = peak;
         }
         Ok(out)
+    }
+
+    /// Snapshot voice positions and effect memory.
+    pub(crate) fn capture_playback(&self) -> PlaybackState {
+        PlaybackState {
+            pads: self
+                .pads
+                .iter()
+                .map(|pad| PadVoice {
+                    phase: match pad.phase {
+                        Phase::Off => 0,
+                        Phase::Play => 1,
+                        Phase::Tail => 2,
+                    },
+                    pos_bits: pad.pos.to_bits(),
+                    tail_left: pad.tail_left,
+                    chain: pad.chain.capture_state(),
+                })
+                .collect(),
+            bus: self.bus.capture_state(),
+        }
+    }
+
+    /// Restore a snapshot from this engine's chain layout.
+    pub(crate) fn restore_playback(&mut self, state: &PlaybackState) -> Result<(), Error> {
+        if state.pads.len() != PAD_COUNT {
+            return Err(Error::StateMismatch {
+                effect: "engine".into(),
+                reason: format!(
+                    "expected {PAD_COUNT} pads, snapshot has {}",
+                    state.pads.len()
+                ),
+            });
+        }
+        for (pad, voice) in self.pads.iter_mut().zip(&state.pads) {
+            pad.phase = match voice.phase {
+                0 => Phase::Off,
+                1 => Phase::Play,
+                2 => Phase::Tail,
+                other => {
+                    return Err(Error::StateMismatch {
+                        effect: "engine".into(),
+                        reason: format!("unknown voice phase {other}"),
+                    });
+                }
+            };
+            pad.pos = f64::from_bits(voice.pos_bits);
+            pad.tail_left = voice.tail_left;
+            pad.chain.restore_state(&voice.chain)?;
+        }
+        self.bus.restore_state(&state.bus)?;
+        Ok(())
     }
 
     /// Render interleaved stereo into `output`.

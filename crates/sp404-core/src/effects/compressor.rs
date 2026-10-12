@@ -1,6 +1,8 @@
 use crate::dsp::{db_to_lin, flush_denormal, sanitize, wet_dry};
 use crate::effect::{impl_effect_accessors, Effect};
 use crate::param::{EffectSchema, ParamScale, ParamSchema};
+use crate::state::{EffectState, Reader, Writer};
+use crate::Error;
 
 const NONE: &[&str] = &[];
 
@@ -147,5 +149,28 @@ impl Effect for Compressor {
 
     fn reset(&mut self) {
         self.env = 0.0;
+    }
+
+    fn capture_state(&self) -> EffectState {
+        let mut writer = Writer::new();
+        writer.f(self.env);
+        writer.finish()
+    }
+
+    fn restore_state(&mut self, state: &EffectState) -> Result<(), Error> {
+        let mut reader = Reader::new(state);
+        let env = reader.f().ok_or_else(bad_state)?;
+        if !reader.finish() {
+            return Err(bad_state());
+        }
+        self.env = env;
+        Ok(())
+    }
+}
+
+fn bad_state() -> Error {
+    Error::StateMismatch {
+        effect: "compressor".into(),
+        reason: "snapshot does not match a compressor".into(),
     }
 }

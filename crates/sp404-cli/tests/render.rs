@@ -15,6 +15,9 @@ fn catalog_mentions_filter_and_presets() {
     assert!(text.contains("\"id\": \"filter\""));
     assert!(text.contains("\"id\": \"lofi\""));
     assert!(text.contains("dub-delay"));
+    assert!(text.contains("\"automatable\": true"));
+    assert!(text.contains("\"kind\": \"keyframes\""));
+    assert!(text.contains("\"kind\": \"spring\""));
 }
 
 #[test]
@@ -69,6 +72,84 @@ fn render_demo_through_a_chain_writes_a_wav() {
     assert!(dry.status.success());
     let dry_audio = decode_wav(&std::fs::read(&dry_path).unwrap()).unwrap();
     assert_ne!(dry_audio.data, decoded.data);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn plan_validate_and_render_write_a_wav() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plans");
+    let sweep = root.join("filter-sweep.json");
+    let throw = root.join("dub-throw.json");
+    let validated = bin()
+        .args(["plan", "validate", sweep.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        validated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validated.stderr)
+    );
+    let summary: serde_json::Value =
+        serde_json::from_slice(&validated.stdout).expect("validate prints json");
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["name"], "filter-sweep");
+    assert!(summary["frames"].as_u64().unwrap() > 10_000);
+
+    let dir = std::env::temp_dir().join(format!("pad404-plan-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let wav = dir.join("sweep.wav");
+    let rendered = bin()
+        .args([
+            "plan",
+            "render",
+            sweep.to_str().unwrap(),
+            "--output",
+            wav.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        rendered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rendered.stderr)
+    );
+    let decoded = decode_wav(&std::fs::read(&wav).unwrap()).unwrap();
+    assert_eq!(&std::fs::read(&wav).unwrap()[..4], b"RIFF");
+    assert!(decoded.peak() > 0.02, "peak {}", decoded.peak());
+    assert!(decoded.data.iter().all(|sample| sample.is_finite()));
+    assert_eq!(decoded.frames() as u64, summary["frames"].as_u64().unwrap());
+
+    let ranged = dir.join("throw.wav");
+    let partial = bin()
+        .args([
+            "plan",
+            "render",
+            throw.to_str().unwrap(),
+            "--output",
+            ranged.to_str().unwrap(),
+            "--start-beat",
+            "2",
+            "--end-beat",
+            "4",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        partial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&partial.stderr)
+    );
+    let tail = decode_wav(&std::fs::read(&ranged).unwrap()).unwrap();
+    assert!(tail.frames() > 1_000);
+    assert!(tail.frames() < decoded.frames());
+    assert!(tail.data.iter().all(|sample| sample.is_finite()));
+    assert!(tail.peak() > 0.01, "peak {}", tail.peak());
+
+    let bad = bin()
+        .args(["plan", "validate", wav.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

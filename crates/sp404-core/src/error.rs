@@ -40,6 +40,15 @@ pub enum Error {
     Wav(String),
     /// Buffer had no frames or an unsupported layout.
     InvalidBuffer(String),
+    /// An arrangement failed validation or could not be rendered.
+    InvalidPlan(String),
+    /// A checkpoint did not match the effect it was restored into.
+    StateMismatch {
+        /// Effect id.
+        effect: String,
+        /// What was wrong with the snapshot.
+        reason: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -61,6 +70,10 @@ impl fmt::Display for Error {
             Error::Json(msg) => write!(f, "invalid chain JSON: {msg}"),
             Error::Wav(msg) => write!(f, "wav: {msg}"),
             Error::InvalidBuffer(msg) => write!(f, "invalid audio buffer: {msg}"),
+            Error::InvalidPlan(msg) => write!(f, "invalid arrangement: {msg}"),
+            Error::StateMismatch { effect, reason } => {
+                write!(f, "state mismatch for '{effect}': {reason}")
+            }
         }
     }
 }

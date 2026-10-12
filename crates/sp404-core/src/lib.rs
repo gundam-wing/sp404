@@ -57,9 +57,11 @@ mod dsp;
 mod effect;
 mod error;
 mod param;
+pub mod plan;
 mod presets;
 mod render;
 mod sampler;
+mod state;
 mod wav;
 
 mod effects;
@@ -69,9 +71,14 @@ pub use chain::{ChainDesc, EffectChain, EffectDesc};
 pub use effect::{create_effect, effect_schema, effect_schemas, Effect, Registry};
 pub use error::Error;
 pub use param::{EffectSchema, ParamScale, ParamSchema};
+pub use plan::{
+    Arrangement, Automation, BusPlan, Ease, Keyframe, LfoShape, PadPlan, PlanBuilder, PlanRenderer,
+    PlanTime, SampleSource, Target, Track, Trigger, ARRANGEMENT_VERSION, CHECKPOINT_FRAMES,
+};
 pub use presets::{chain_presets, ChainPreset};
 pub use render::{render, render_json, render_performance, NoteEvent};
 pub use sampler::{Engine, PadView, PAD_COUNT};
+pub use state::EffectState;
 pub use wav::{decode_wav, encode_wav};
 
 /// Schema document version emitted by [`catalog_json`].
@@ -83,7 +90,22 @@ pub const CATALOG_VERSION: u32 = 1;
 /// Each parameter lists `min`, `max`, `default`, `unit`, and `scale`
 /// (`linear`, `logarithmic`, or `choice`).
 pub fn catalog_json() -> String {
-    let effects = effect_schemas();
+    let mut effects = serde_json::to_value(effect_schemas()).expect("schemas are finite");
+    if let Some(list) = effects.as_array_mut() {
+        for effect in list {
+            let Some(params) = effect
+                .get_mut("params")
+                .and_then(|value| value.as_array_mut())
+            else {
+                continue;
+            };
+            for param in params {
+                if let Some(object) = param.as_object_mut() {
+                    object.insert("automatable".to_string(), serde_json::Value::Bool(true));
+                }
+            }
+        }
+    }
     let presets: Vec<serde_json::Value> = chain_presets()
         .iter()
         .map(|preset| {
@@ -101,6 +123,7 @@ pub fn catalog_json() -> String {
         "version": CATALOG_VERSION,
         "effects": effects,
         "presets": presets,
+        "arrangement": plan::arrangement_catalog(),
     });
     serde_json::to_string_pretty(&doc).expect("catalog is static and finite")
 }
