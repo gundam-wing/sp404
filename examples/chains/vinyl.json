@@ -1,0 +1,33 @@
+{
+  "effects": [
+    {
+      "effect": "vinyl",
+      "params": {
+        "wow": 0.35,
+        "flutter": 0.2,
+        "crackle": 0.45,
+        "wear": 0.4,
+        "mix": 0.85
+      }
+    },
+    {
+      "effect": "compressor",
+      "params": {
+        "threshold_db": -18,
+        "ratio": 4,
+        "attack_ms": 8,
+        "release_ms": 140,
+        "makeup_db": 3,
+        "mix": 1
+      }
+    },
+    {
+      "effect": "isolator",
+      "params": {
+        "low_db": 3,
+        "mid_db": -1.5,
+        "high_db": -2
+      }
+    }
+  ]
+}

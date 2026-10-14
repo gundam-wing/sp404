@@ -1,0 +1,30 @@
+{
+  "effects": [
+    {
+      "effect": "filter",
+      "params": {
+        "mode": 2,
+        "cutoff": 700,
+        "resonance": 0.15,
+        "mix": 1.0
+      }
+    },
+    {
+      "effect": "lofi",
+      "params": {
+        "bit_depth": 6,
+        "downsample": 3,
+        "mix": 1.0
+      }
+    },
+    {
+      "effect": "filter",
+      "params": {
+        "mode": 0,
+        "cutoff": 2800,
+        "resonance": 0.35,
+        "mix": 1.0
+      }
+    }
+  ]
+}

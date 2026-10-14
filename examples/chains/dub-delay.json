@@ -1,0 +1,32 @@
+{
+  "effects": [
+    {
+      "effect": "filter",
+      "params": {
+        "mode": 0,
+        "cutoff": 1800,
+        "resonance": 0.55,
+        "mix": 0.7
+      }
+    },
+    {
+      "effect": "delay",
+      "params": {
+        "time_ms": 375,
+        "feedback": 0.45,
+        "tone": 0.35,
+        "ping_pong": 0.7,
+        "mix": 0.35
+      }
+    },
+    {
+      "effect": "reverb",
+      "params": {
+        "room": 0.62,
+        "damp": 0.45,
+        "width": 0.85,
+        "mix": 0.22
+      }
+    }
+  ]
+}

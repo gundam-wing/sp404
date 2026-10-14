@@ -1,0 +1,17 @@
+[package]
+name = "sp404-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Native pad-sampler interface for the Pad404 engine."
+
+[[bin]]
+name = "sp404-ui"
+path = "src/main.rs"
+
+[dependencies]
+sp404-core = { path = "../sp404-core" }
+# glow + x11/wayland. Persistence and accesskit stay off; this crate is native-only.
+eframe = { version = "0.31.1", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+cpal = "0.15.3"

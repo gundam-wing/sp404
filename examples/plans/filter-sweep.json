@@ -1,0 +1,54 @@
+{
+  "name": "filter-sweep",
+  "version": 1,
+  "sample_rate": 44100,
+  "tempo": 100,
+  "duration": { "beats": 4 },
+  "master": { "kind": "constant", "value": 0.9 },
+  "pads": [
+    { "pad": 0, "sample": { "kind": "demo", "name": "kick" } },
+    { "pad": 1, "sample": { "kind": "demo", "name": "snare" } },
+    { "pad": 2, "sample": { "kind": "demo", "name": "hat" } },
+    { "pad": 8, "sample": { "kind": "demo", "name": "chord" } }
+  ],
+  "bus": {
+    "chain": {
+      "effects": [
+        {
+          "effect": "filter",
+          "params": { "mode": 0, "cutoff": 280, "resonance": 0.62, "mix": 1 }
+        }
+      ]
+    },
+    "automation": [
+      {
+        "effect": 0,
+        "param": "cutoff",
+        "track": {
+          "kind": "keyframes",
+          "keys": [
+            { "at": { "beats": 0 }, "value": 280 },
+            { "at": { "beats": 4 }, "value": 7200, "ease": "smooth" }
+          ]
+        }
+      }
+    ]
+  },
+  "triggers": [
+    { "pad": 0, "at": { "beats": 0 } },
+    { "pad": 0, "at": { "beats": 1 } },
+    { "pad": 0, "at": { "beats": 2 } },
+    { "pad": 0, "at": { "beats": 3 } },
+    { "pad": 1, "at": { "beats": 1 } },
+    { "pad": 1, "at": { "beats": 3 } },
+    { "pad": 2, "at": { "beats": 0 } },
+    { "pad": 2, "at": { "beats": 0.5 } },
+    { "pad": 2, "at": { "beats": 1 } },
+    { "pad": 2, "at": { "beats": 1.5 } },
+    { "pad": 2, "at": { "beats": 2 } },
+    { "pad": 2, "at": { "beats": 2.5 } },
+    { "pad": 2, "at": { "beats": 3 } },
+    { "pad": 2, "at": { "beats": 3.5 } },
+    { "pad": 8, "at": { "beats": 0 }, "gain": 0.7 }
+  ]
+}

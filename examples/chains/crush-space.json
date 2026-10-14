@@ -1,0 +1,27 @@
+{
+  "effects": [
+    {
+      "effect": "lofi",
+      "params": {
+        "bit_depth": 5,
+        "downsample": 6,
+        "mix": 0.8
+      }
+    },
+    {
+      "effect": "reverb",
+      "params": {
+        "room": 0.8,
+        "damp": 0.3,
+        "width": 1.0,
+        "mix": 0.4
+      }
+    },
+    {
+      "effect": "gain",
+      "params": {
+        "gain_db": 3
+      }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "effects": [
+    {
+      "effect": "pitch",
+      "params": {
+        "semitones": -5,
+        "mix": 1
+      }
+    },
+    {
+      "effect": "delay",
+      "params": {
+        "time_ms": 220,
+        "feedback": 0.3,
+        "tone": 0.5,
+        "ping_pong": 0.4,
+        "mix": 0.28
+      }
+    }
+  ]
+}
