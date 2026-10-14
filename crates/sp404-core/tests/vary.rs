@@ -136,6 +136,27 @@ fn a_file_path_keeps_the_slices_as_cuts_instead_of_embedding_samples() {
 }
 
 #[test]
+fn a_long_dense_stretch_is_split_into_loopable_phrases() {
+    let sample_rate = 16_000.0;
+    let frames = (sample_rate * 20.0) as usize;
+    let mut data = vec![0.0; frames * 2];
+    tone(0.2, 19.5, 196.0, 0.4, &mut data, sample_rate);
+    // A breath near the middle, quieter than the surrounding tone.
+    tone(9.4, 10.2, 196.0, 0.18, &mut data, sample_rate);
+    let buffer = AudioBuffer::new(sample_rate, 2, data).unwrap();
+    let analysis = analyze(&buffer).unwrap();
+    assert!(
+        analysis.phrases.len() >= 2,
+        "expected a split, got {:?}",
+        analysis.phrases
+    );
+    for phrase in &analysis.phrases {
+        let length = phrase.end - phrase.start;
+        assert!(length <= 8.0, "phrase is too long to loop: {phrase:?}");
+    }
+}
+
+#[test]
 fn silence_is_rejected() {
     let data = vec![0.0; 16_000 * 2];
     let buffer = AudioBuffer::new(16_000.0, 2, data).unwrap();

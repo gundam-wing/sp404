@@ -359,7 +359,6 @@ fn split_run(env: &Env, start: usize, end: usize, out: &mut Vec<(usize, usize)>)
         out.push((start, end));
         return;
     }
-    let median = median(&env.rms[start..end]);
     let margin = ((end - start) as f32 * 0.18) as usize;
     let lo = start + margin.max(1);
     let hi = end.saturating_sub(margin.max(1));
@@ -375,14 +374,13 @@ fn split_run(env: &Env, start: usize, end: usize, out: &mut Vec<(usize, usize)>)
             }
         }
     }
+    // A long stretch always breaks at its quietest interior dip, even when
+    // that dip is only a little softer than the rest. Leaving it whole
+    // produces a phrase too long to loop.
     let Some(dip) = dip else {
         out.push((start, end));
         return;
     };
-    if quiet > median * 0.82 && length < 14.0 {
-        out.push((start, end));
-        return;
-    }
     split_run(env, start, dip, out);
     split_run(env, dip, end, out);
 }
@@ -390,8 +388,12 @@ fn split_run(env: &Env, start: usize, end: usize, out: &mut Vec<(usize, usize)>)
 fn merge_close(env: &Env, runs: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
     let mut merged = Vec::new();
     for (start, end) in runs {
-        if let Some((_, previous_end)) = merged.last_mut() {
-            if env.time(start) - env.time(*previous_end) < 0.18 {
+        if let Some((previous_start, previous_end)) = merged.last_mut() {
+            let gap = env.time(start) - env.time(*previous_end);
+            let combined = env.time(end) - env.time(*previous_start);
+            // A split inside one long stretch leaves the pieces touching.
+            // Only glue a real rest, and only when the result still loops.
+            if gap > 0.0 && gap < 0.18 && combined <= 7.5 {
                 *previous_end = end;
                 continue;
             }
@@ -673,15 +675,6 @@ fn filter_keys(duration: f64, open: f32) -> Vec<Keyframe> {
 
 fn master_gain(rms: f32) -> f32 {
     (0.16 / rms.max(0.02)).clamp(0.35, 1.0)
-}
-
-fn median(values: &[f32]) -> f32 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
-    sorted[sorted.len() / 2]
 }
 
 fn round3(value: f64) -> f64 {
