@@ -18,6 +18,7 @@ fn catalog_mentions_filter_and_presets() {
     assert!(text.contains("\"automatable\": true"));
     assert!(text.contains("\"kind\": \"keyframes\""));
     assert!(text.contains("\"kind\": \"spring\""));
+    assert!(text.contains("\"kind\": \"file\""));
 }
 
 #[test]
@@ -150,6 +151,84 @@ fn plan_validate_and_render_write_a_wav() {
         .output()
         .unwrap();
     assert!(!bad.status.success());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn plan_inlines_a_wav_beside_the_plan() {
+    let dir = std::env::temp_dir().join(format!("pad404-file-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sample = sp404_core::AudioBuffer::demo("snare", 16_000.0).unwrap();
+    std::fs::write(
+        dir.join("take.wav"),
+        sp404_core::encode_wav(&sample).unwrap(),
+    )
+    .unwrap();
+    let plan = dir.join("plan.json");
+    std::fs::write(
+        &plan,
+        r#"{
+            "name": "file-take",
+            "sample_rate": 16000,
+            "tempo": 120,
+            "duration": { "seconds": 0.4 },
+            "pads": [{ "pad": 0, "sample": { "kind": "file", "path": "take.wav" } }],
+            "triggers": [{ "pad": 0, "at": { "seconds": 0.0 } }]
+        }"#,
+    )
+    .unwrap();
+
+    let validated = bin()
+        .args(["plan", "validate", plan.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        validated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validated.stderr)
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&validated.stdout).unwrap();
+    assert_eq!(summary["name"], "file-take");
+
+    let wav = dir.join("out.wav");
+    let rendered = bin()
+        .args([
+            "plan",
+            "render",
+            plan.to_str().unwrap(),
+            "--output",
+            wav.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        rendered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rendered.stderr)
+    );
+    let decoded = decode_wav(&std::fs::read(&wav).unwrap()).unwrap();
+    assert!(decoded.peak() > 0.05, "peak {}", decoded.peak());
+    assert!(decoded.frames() > 1_000);
+
+    let missing = dir.join("missing.json");
+    std::fs::write(
+        &missing,
+        r#"{
+            "sample_rate": 16000,
+            "tempo": 120,
+            "duration": { "seconds": 0.2 },
+            "pads": [{ "pad": 0, "sample": { "kind": "file", "path": "nope.wav" } }],
+            "triggers": [{ "pad": 0, "at": { "seconds": 0 } }]
+        }"#,
+    )
+    .unwrap();
+    let bad = bin()
+        .args(["plan", "validate", missing.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+    let err = String::from_utf8_lossy(&bad.stderr);
+    assert!(err.contains("nope.wav"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

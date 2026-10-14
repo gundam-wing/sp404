@@ -47,10 +47,18 @@
 //! An out-of-process agent (CLI today, MCP or another host later) only needs
 //! `catalog_json`, `ChainDesc`, `render` / `render_json`, and `encode_wav`.
 //! The sampler UI is a separate client of [`Engine`].
+//!
+//! # Recording
+//!
+//! [`ingest_take`] turns interleaved frames into a stereo [`AudioBuffer`] at
+//! the engine rate. The host records those frames. This crate does not open a
+//! microphone, so a browser shell can pass the same buffers from an
+//! AudioWorklet.
 
 #![forbid(unsafe_code)]
 
 mod buffer;
+mod capture;
 mod chain;
 mod demos;
 mod dsp;
@@ -67,6 +75,7 @@ mod wav;
 mod effects;
 
 pub use buffer::AudioBuffer;
+pub use capture::{ingest_take, Take, TakeOptions};
 pub use chain::{ChainDesc, EffectChain, EffectDesc};
 pub use effect::{create_effect, effect_schema, effect_schemas, Effect, Registry};
 pub use error::Error;

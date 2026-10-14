@@ -129,6 +129,11 @@ pub enum SampleSource {
         /// Interleaved samples.
         samples: Vec<f32>,
     },
+    /// A WAV path. The core does not open it; the host inlines the samples.
+    File {
+        /// Path the host can read. Relative paths are resolved by that host.
+        path: String,
+    },
 }
 
 /// One pad hit.
@@ -622,6 +627,12 @@ impl PlanBuilder {
         self
     }
 
+    /// Point `pad` at a WAV path. The core will not open it.
+    pub fn pad_file(mut self, pad: usize, path: impl Into<String>) -> Self {
+        self.draft(pad).sample = Some(SampleSource::File { path: path.into() });
+        self
+    }
+
     /// Embed `buffer` in the plan.
     pub fn pad_pcm(mut self, pad: usize, buffer: &AudioBuffer) -> Self {
         self.draft(pad).sample = Some(SampleSource::Pcm {
@@ -813,6 +824,15 @@ pub fn arrangement_catalog() -> serde_json::Value {
                 "fields": ["from", "to", "at", "response", "bounce"],
                 "note": "Closed-form damped spring released at `at` with zero velocity. bounce 0 is critically damped."
             }
+        ],
+        "samples": [
+            { "kind": "demo", "fields": ["name"] },
+            { "kind": "pcm", "fields": ["sample_rate", "channels", "samples"] },
+            {
+                "kind": "file",
+                "fields": ["path"],
+                "note": "A WAV path. The core does not open it. The CLI inlines the file before rendering."
+            }
         ]
     })
 }
@@ -848,6 +868,13 @@ fn validate_sample(sample: &SampleSource) -> Result<(), Error> {
                 return Err(invalid("pcm contains a non-finite sample"));
             }
             Ok(())
+        }
+        SampleSource::File { path } => {
+            if path.is_empty() || path.contains('\0') {
+                Err(invalid("file sample path is empty"))
+            } else {
+                Ok(())
+            }
         }
     }
 }

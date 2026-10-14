@@ -11,6 +11,7 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use sp404_core::plan::{frame_at, Arrangement, PlanTime};
+use sp404_core::SampleSource;
 use sp404_core::{catalog_json, effect_schema, presets_json, render, AudioBuffer, ChainDesc};
 
 fn main() -> ExitCode {
@@ -171,7 +172,8 @@ fn plan_cmd(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         Some("validate") => {
             let path = args.next().ok_or("usage: sp404 plan validate <plan.json>")?;
             let text = std::fs::read_to_string(&path).map_err(|err| format!("reading {path}: {err}"))?;
-            let plan = Arrangement::from_json(&text).map_err(|err| err.to_string())?;
+            let mut plan = Arrangement::from_json(&text).map_err(|err| err.to_string())?;
+            inline_files(&mut plan, std::path::Path::new(&path))?;
             let frames = plan.duration_frames().map_err(|err| err.to_string())?;
             println!(
                 "{}",
@@ -195,6 +197,33 @@ fn plan_cmd(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     }
 }
 
+fn inline_files(plan: &mut Arrangement, plan_path: &std::path::Path) -> Result<(), String> {
+    let base = plan_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    for pad in &mut plan.pads {
+        let SampleSource::File { path } = &pad.sample else {
+            continue;
+        };
+        let full = if std::path::Path::new(path).is_absolute() {
+            std::path::PathBuf::from(path)
+        } else {
+            base.join(path)
+        };
+        let bytes =
+            std::fs::read(&full).map_err(|err| format!("reading {}: {err}", full.display()))?;
+        let buffer = sp404_core::decode_wav(&bytes)
+            .map_err(|err| format!("decoding {}: {err}", full.display()))?;
+        pad.sample = SampleSource::Pcm {
+            sample_rate: buffer.sample_rate,
+            channels: buffer.channels as u8,
+            samples: buffer.data,
+        };
+    }
+    plan.validate().map_err(|err| err.to_string())?;
+    Ok(())
+}
+
 struct PlanRenderArgs {
     path: String,
     output: String,
@@ -206,7 +235,8 @@ fn plan_render(args: impl Iterator<Item = String>) -> Result<(), String> {
     let args = parse_plan_render(args)?;
     let text = std::fs::read_to_string(&args.path)
         .map_err(|err| format!("reading {}: {err}", args.path))?;
-    let plan = Arrangement::from_json(&text).map_err(|err| err.to_string())?;
+    let mut plan = Arrangement::from_json(&text).map_err(|err| err.to_string())?;
+    inline_files(&mut plan, std::path::Path::new(&args.path))?;
     let start = match args.start {
         Some(time) => frame_at(&plan, time).map_err(|err| err.to_string())?,
         None => 0,
