@@ -70,6 +70,7 @@ mod presets;
 mod render;
 mod sampler;
 mod state;
+mod vary;
 mod wav;
 
 mod effects;
@@ -88,6 +89,7 @@ pub use presets::{chain_presets, ChainPreset};
 pub use render::{render, render_json, render_performance, NoteEvent};
 pub use sampler::{Engine, PadView, PAD_COUNT};
 pub use state::EffectState;
+pub use vary::{analyze, vary, Analysis, Phrase, Variation, VaryRequest};
 pub use wav::{decode_wav, encode_wav};
 
 /// Schema document version emitted by [`catalog_json`].

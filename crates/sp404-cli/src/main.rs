@@ -8,11 +8,15 @@
 
 use std::env;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use sp404_core::plan::{frame_at, Arrangement, PlanTime};
 use sp404_core::SampleSource;
-use sp404_core::{catalog_json, effect_schema, presets_json, render, AudioBuffer, ChainDesc};
+use sp404_core::{
+    analyze, catalog_json, effect_schema, presets_json, render, vary, AudioBuffer, ChainDesc,
+    VaryRequest,
+};
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -65,6 +69,13 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("vary") => match vary_cmd(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: {err}");
+                ExitCode::from(1)
+            }
+        },
         Some("help") | Some("--help") | Some("-h") => {
             print_usage();
             ExitCode::SUCCESS
@@ -94,13 +105,16 @@ Usage:
   sp404 render --output <file.wav|-> (--input <file.wav> | --demo <name>) [--chain <chain.json>] [--sample-rate <hz>]
   sp404 plan validate <plan.json>
   sp404 plan render <plan.json> --output <file.wav|-> [--start <sec>] [--end <sec>] [--start-beat <beats>] [--end-beat <beats>]
+  sp404 vary <file.wav> [--seed N] [--count N] [--around SEC] [--output-dir DIR]
 
 `catalog` prints effect schemas (ids, ranges, units, defaults, automatable) and arrangement tracks.
 `render` writes 16-bit stereo WAV. Use `--output -` to write WAV bytes to stdout.
 Omitting `--chain` copies the input. Mono files are expanded to stereo.
 A chain file is a JSON object `{{\"effects\":[...]}}` or a bare array of effects.
 `plan validate` checks an arrangement. `plan render` bounces a time range of it.
-The default range is the whole plan. Start and end accept seconds or beats, not both."
+The default range is the whole plan. Start and end accept seconds or beats, not both.
+`vary` prints the phrases it found. `--around` is seconds into that file, not into a previous bounce.
+`--output-dir` writes one plan and WAV per seed. Plans point at the source WAV and cut it with start/end."
     );
 }
 
@@ -328,6 +342,181 @@ fn parse_plan_render(args: impl Iterator<Item = String>) -> Result<PlanRenderArg
         start,
         end,
     })
+}
+
+struct VaryArgs {
+    input: String,
+    seed: u64,
+    count: u64,
+    around: Option<f64>,
+    output_dir: Option<String>,
+}
+
+fn vary_cmd(args: impl Iterator<Item = String>) -> Result<(), String> {
+    let args = parse_vary(args)?;
+    let bytes =
+        std::fs::read(&args.input).map_err(|err| format!("reading {}: {err}", args.input))?;
+    let buffer =
+        sp404_core::decode_wav(&bytes).map_err(|err| format!("decoding {}: {err}", args.input))?;
+    let analysis = analyze(&buffer).map_err(|err| err.to_string())?;
+    let source = PathBuf::from(&args.input);
+    let mut written = Vec::new();
+    for offset in 0..args.count {
+        let seed = args.seed + offset;
+        let plan_path = args
+            .output_dir
+            .as_ref()
+            .map(|dir| PathBuf::from(dir).join(format!("variation-{seed}.json")));
+        let source_path = match &plan_path {
+            Some(plan) => relative_to(plan.parent().unwrap_or(Path::new(".")), &source),
+            None => args.input.clone(),
+        };
+        let variation = vary(VaryRequest {
+            buffer: &buffer,
+            seed,
+            around: args.around,
+            source_path: Some(&source_path),
+        })
+        .map_err(|err| err.to_string())?;
+        let wav_path = if let Some(plan_path) = &plan_path {
+            if let Some(dir) = plan_path.parent() {
+                std::fs::create_dir_all(dir)
+                    .map_err(|err| format!("creating {}: {err}", dir.display()))?;
+            }
+            let json = variation.plan.to_json().map_err(|err| err.to_string())?;
+            std::fs::write(plan_path, json)
+                .map_err(|err| format!("writing {}: {err}", plan_path.display()))?;
+            let mut plan = variation.plan.clone();
+            inline_files(&mut plan, plan_path)?;
+            let frames = plan.duration_frames().map_err(|err| err.to_string())?;
+            let rendered = plan.render(0, frames).map_err(|err| err.to_string())?;
+            let wav = sp404_core::encode_wav(&rendered).map_err(|err| err.to_string())?;
+            let wav_path = plan_path.with_extension("wav");
+            std::fs::write(&wav_path, wav)
+                .map_err(|err| format!("writing {}: {err}", wav_path.display()))?;
+            eprintln!(
+                "seed {seed} pattern {} pitch {:.0} hero {:.2}-{:.2}s peak {:.3} -> {}",
+                variation.pattern,
+                variation.pitch,
+                variation.hero.start,
+                variation.hero.end,
+                rendered.peak(),
+                wav_path.display()
+            );
+            Some(wav_path.display().to_string())
+        } else {
+            None
+        };
+        written.push(serde_json::json!({
+            "seed": variation.seed,
+            "pattern": variation.pattern,
+            "pitch": variation.pitch,
+            "hero": variation.hero,
+            "neighbors": variation.neighbors,
+            "plan": plan_path.as_ref().map(|path| path.display().to_string()),
+            "wav": wav_path,
+        }));
+    }
+    let report = serde_json::json!({
+        "method": "20 ms loudness envelope. Active stretches are split at breaths, then scored by attack, contrast, and length.",
+        "sample_rate": analysis.sample_rate,
+        "duration": analysis.duration,
+        "phrases": analysis.phrases,
+        "variations": written,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).map_err(|err| err.to_string())?
+    );
+    Ok(())
+}
+
+fn parse_vary(args: impl Iterator<Item = String>) -> Result<VaryArgs, String> {
+    let args: Vec<String> = args.collect();
+    if args.is_empty() {
+        return Err(
+            "usage: sp404 vary <file.wav> [--seed N] [--count N] [--around SEC] [--output-dir DIR]"
+                .into(),
+        );
+    }
+    let input = args[0].clone();
+    if input.starts_with("--") {
+        return Err("wav path must come before flags".into());
+    }
+    let mut seed = 1_u64;
+    let mut count = 1_u64;
+    let mut around = None;
+    let mut output_dir = None;
+    let mut index = 1;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        let value = args
+            .get(index + 1)
+            .cloned()
+            .ok_or_else(|| format!("missing value for {flag}"))?;
+        match flag {
+            "--seed" => {
+                seed = value
+                    .parse()
+                    .map_err(|_| format!("invalid seed '{value}'"))?;
+            }
+            "--count" => {
+                count = value
+                    .parse()
+                    .map_err(|_| format!("invalid count '{value}'"))?;
+                if !(1..=16).contains(&count) {
+                    return Err("--count must be from 1 to 16".into());
+                }
+            }
+            "--around" => {
+                around = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("invalid time '{value}' for --around"))?,
+                );
+            }
+            "--output-dir" => output_dir = Some(value),
+            other => return Err(format!("unknown flag '{other}'")),
+        }
+        index += 2;
+    }
+    Ok(VaryArgs {
+        input,
+        seed,
+        count,
+        around,
+        output_dir,
+    })
+}
+
+/// Path of `target` as seen from `from_dir`, so a plan can sit next to its render.
+fn relative_to(from_dir: &Path, target: &Path) -> String {
+    let from = from_dir
+        .canonicalize()
+        .unwrap_or_else(|_| from_dir.to_path_buf());
+    let target = target
+        .canonicalize()
+        .unwrap_or_else(|_| target.to_path_buf());
+    let from_parts: Vec<_> = from.components().collect();
+    let target_parts: Vec<_> = target.components().collect();
+    let mut shared = 0;
+    while shared < from_parts.len()
+        && shared < target_parts.len()
+        && from_parts[shared] == target_parts[shared]
+    {
+        shared += 1;
+    }
+    let mut relative = PathBuf::new();
+    for _ in shared..from_parts.len() {
+        relative.push("..");
+    }
+    for part in &target_parts[shared..] {
+        relative.push(part);
+    }
+    if relative.as_os_str().is_empty() {
+        return target.display().to_string();
+    }
+    relative.to_string_lossy().replace('\\', "/")
 }
 
 fn parse_render(args: impl Iterator<Item = String>) -> Result<RenderArgs, String> {

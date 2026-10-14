@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use sp404_core::decode_wav;
+use sp404_core::{decode_wav, encode_wav, AudioBuffer};
 
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_sp404"))
@@ -229,6 +229,57 @@ fn plan_inlines_a_wav_beside_the_plan() {
     assert!(!bad.status.success());
     let err = String::from_utf8_lossy(&bad.stderr);
     assert!(err.contains("nope.wav"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn vary_writes_a_plan_and_a_wav_for_each_seed() {
+    let dir = std::env::temp_dir().join(format!("pad404-vary-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sample_rate = 16_000.0;
+    let frames = (sample_rate * 6.0) as usize;
+    let mut data = vec![0.0; frames * 2];
+    for frame in 0..frames {
+        let time = frame as f32 / sample_rate;
+        if (0.3..1.8).contains(&time) {
+            let sample = (time * 180.0).sin() * 0.6;
+            data[frame * 2] = sample;
+            data[frame * 2 + 1] = sample;
+        }
+    }
+    let source = dir.join("source.wav");
+    let buffer = AudioBuffer::new(sample_rate, 2, data).unwrap();
+    std::fs::write(&source, encode_wav(&buffer).unwrap()).unwrap();
+    let out = dir.join("out");
+    let output = bin()
+        .args([
+            "vary",
+            source.to_str().unwrap(),
+            "--seed",
+            "4",
+            "--count",
+            "2",
+            "--around",
+            "1",
+            "--output-dir",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!report["phrases"].as_array().unwrap().is_empty());
+    assert_eq!(report["variations"].as_array().unwrap().len(), 2);
+    let wav = std::fs::read(out.join("variation-4.wav")).unwrap();
+    assert_eq!(&wav[..4], b"RIFF");
+    let decoded = decode_wav(&wav).unwrap();
+    assert!(decoded.peak() > 0.02, "peak {}", decoded.peak());
+    let plan = std::fs::read_to_string(out.join("variation-4.json")).unwrap();
+    assert!(plan.contains("source.wav"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
