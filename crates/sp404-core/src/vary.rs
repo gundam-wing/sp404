@@ -674,7 +674,9 @@ fn filter_keys(duration: f64, open: f32) -> Vec<Keyframe> {
 }
 
 fn master_gain(rms: f32) -> f32 {
-    (0.16 / rms.max(0.02)).clamp(0.35, 1.0)
+    // Cap below unity. Several phrases play at once, and the bus compressor
+    // adds makeup, so a full-scale master clips on the stacked loops.
+    (0.16 / rms.max(0.02)).clamp(0.35, 0.8)
 }
 
 fn round3(value: f64) -> f64 {
