@@ -136,6 +136,20 @@ Feedback effects stay on this one implementation. A delay with feedback is not a
 
 `ChainDesc` is unchanged. A chain file still renders through `sp404 render`. An arrangement composes those chains over time.
 
+### Variations come from a loudness search
+
+`sp404 vary` reads a WAV and proposes loops. It does not listen for melody or lyrics. Every 20 ms it measures loudness. Stretches above the noise floor are phrases. A long stretch is split where the loudness dips, which is where a breath or a rest usually is. Each phrase gets a score from three things: how hard it attacks, how much louder the peaks are than the average, and whether the length is near a few seconds.
+
+`--around 80` does not mean "80 seconds into the last bounce". It means 80 seconds into the file you passed. The score is divided by the distance from that time, so a nearby phrase wins even if another stretch is slightly more active. Omit `--around` and the seed picks among the top few scores.
+
+The seed also picks the slowdown (from 3 to 7 semitones down), the reverb and vinyl amount, and one of four loop shapes: repeat then expand, lead in with the previous phrase, stutter the attack, or overlap the neighbors. The same file and seed always write the same plan.
+
+```bash
+sp404 vary take.wav --around 80 --seed 3 --count 4 --output-dir variations
+```
+
+That prints the phrases and writes `variation-3.json` through `variation-6.json`, each with a WAV beside it. The plan points at `take.wav` and cuts it with pad start/end, so the core still does not open files. From Rust the same calls are `analyze` and `vary`.
+
 ```bash
 sp404 plan validate examples/plans/filter-sweep.json
 sp404 plan render examples/plans/filter-sweep.json --output sweep.wav
@@ -234,6 +248,7 @@ If no output device is present, the window still opens and a silent clock keeps 
 - the UI capture path appends only while armed, caps a take at 60 seconds, and a resample through the session clock becomes a pad sample
 - effect memory snapshots restore bit-exactly
 - `render(plan, start..end)` matches a full render for fresh chunking, cursor chunking, checkpoint boundaries, and random slices in shuffled order
+- phrase search ranks a louder burst above a quieter one, `--around` selects the nearby phrase, and the same seed rebuilds the same plan
 
 ## Next steps
 
