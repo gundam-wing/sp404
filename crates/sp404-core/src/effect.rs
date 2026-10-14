@@ -1,5 +1,6 @@
 use crate::chain::{ChainDesc, EffectChain, EffectDesc};
 use crate::param::EffectSchema;
+use crate::state::EffectState;
 use crate::Error;
 
 /// A self-contained stereo processor.
@@ -35,6 +36,32 @@ pub trait Effect: Send {
 
     /// Clear delay lines, filters, and envelopes. Parameters stay put.
     fn reset(&mut self);
+
+    /// Copy delay lines, filter memory, and counters.
+    ///
+    /// The default is an empty snapshot, which is correct for a stateless
+    /// processor such as gain. A stateful effect must override this and
+    /// [`Effect::restore_state`] together. Parameters and bypass are not part
+    /// of the snapshot; the caller reapplies them.
+    fn capture_state(&self) -> EffectState {
+        EffectState::default()
+    }
+
+    /// Replace delay lines, filter memory, and counters.
+    ///
+    /// Restoring an empty snapshot into a stateless effect succeeds. A
+    /// mismatched blob returns [`Error::StateMismatch`] and leaves the effect
+    /// unchanged when the implementation checks the blob before writing.
+    fn restore_state(&mut self, state: &EffectState) -> Result<(), Error> {
+        if state.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::StateMismatch {
+                effect: self.schema().id.to_string(),
+                reason: "this effect has no internal state".into(),
+            })
+        }
+    }
 }
 
 #[derive(Clone, Copy)]

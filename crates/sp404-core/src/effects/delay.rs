@@ -1,6 +1,8 @@
 use crate::dsp::{flush_denormal, read_frac, sanitize, wet_dry, OnePole};
 use crate::effect::{impl_effect_accessors, Effect};
 use crate::param::{EffectSchema, ParamScale, ParamSchema};
+use crate::state::{EffectState, Reader, Writer};
+use crate::Error;
 
 const NONE: &[&str] = &[];
 
@@ -155,5 +157,53 @@ impl Effect for Delay {
         self.write = 0;
         self.tone_l.reset();
         self.tone_r.reset();
+    }
+
+    fn capture_state(&self) -> EffectState {
+        let mut writer = Writer::new();
+        writer.u(self.write as u32);
+        writer.u(self.buf_l.len() as u32);
+        writer.f(self.prepared_sr);
+        writer.f(self.tone_l.z());
+        writer.f(self.tone_r.z());
+        writer.samples(&self.buf_l);
+        writer.samples(&self.buf_r);
+        writer.finish()
+    }
+
+    fn restore_state(&mut self, state: &EffectState) -> Result<(), Error> {
+        let mut reader = Reader::new(state);
+        let write = reader.u().ok_or_else(bad_state)? as usize;
+        let len = reader.u().ok_or_else(bad_state)? as usize;
+        let prepared_sr = reader.f().ok_or_else(bad_state)?;
+        let tone_l = reader.f().ok_or_else(bad_state)?;
+        let tone_r = reader.f().ok_or_else(bad_state)?;
+        let left = reader.samples(len).ok_or_else(bad_state)?.to_vec();
+        let right = reader.samples(len).ok_or_else(bad_state)?.to_vec();
+        if !reader.finish() || !head_in_range(write, len) {
+            return Err(bad_state());
+        }
+        self.write = write;
+        self.prepared_sr = prepared_sr;
+        self.tone_l.set_z(tone_l);
+        self.tone_r.set_z(tone_r);
+        self.buf_l = left;
+        self.buf_r = right;
+        Ok(())
+    }
+}
+
+fn head_in_range(write: usize, len: usize) -> bool {
+    if len == 0 {
+        write == 0
+    } else {
+        write < len
+    }
+}
+
+fn bad_state() -> Error {
+    Error::StateMismatch {
+        effect: "delay".into(),
+        reason: "snapshot does not match a delay".into(),
     }
 }

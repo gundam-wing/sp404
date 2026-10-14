@@ -1,6 +1,8 @@
 use crate::dsp::{flush_denormal, sanitize, wet_dry};
 use crate::effect::{impl_effect_accessors, Effect};
 use crate::param::{EffectSchema, ParamScale, ParamSchema};
+use crate::state::{EffectState, Reader, Writer};
+use crate::Error;
 
 const NONE: &[&str] = &[];
 
@@ -90,6 +92,27 @@ impl Comb {
         }
         output
     }
+
+    fn capture(&self, writer: &mut Writer) {
+        writer.u(self.index as u32);
+        writer.u(self.buf.len() as u32);
+        writer.f(self.filterstore);
+        writer.samples(&self.buf);
+    }
+
+    fn restore(&mut self, reader: &mut Reader<'_>) -> Option<()> {
+        let index = reader.u()? as usize;
+        let len = reader.u()? as usize;
+        let filterstore = reader.f()?;
+        let buf = reader.samples(len)?.to_vec();
+        if len == 0 || index >= len {
+            return None;
+        }
+        self.index = index;
+        self.filterstore = filterstore;
+        self.buf = buf;
+        Some(())
+    }
 }
 
 struct Allpass {
@@ -114,6 +137,24 @@ impl Allpass {
             self.index = 0;
         }
         output
+    }
+
+    fn capture(&self, writer: &mut Writer) {
+        writer.u(self.index as u32);
+        writer.u(self.buf.len() as u32);
+        writer.samples(&self.buf);
+    }
+
+    fn restore(&mut self, reader: &mut Reader<'_>) -> Option<()> {
+        let index = reader.u()? as usize;
+        let len = reader.u()? as usize;
+        let buf = reader.samples(len)?.to_vec();
+        if len == 0 || index >= len {
+            return None;
+        }
+        self.index = index;
+        self.buf = buf;
+        Some(())
     }
 }
 
@@ -204,5 +245,81 @@ impl Effect for Reverb {
             allpass.buf.fill(0.0);
             allpass.index = 0;
         }
+    }
+
+    fn capture_state(&self) -> EffectState {
+        let mut writer = Writer::new();
+        writer.u(self.combs_l.len() as u32);
+        writer.u(self.combs_r.len() as u32);
+        writer.u(self.all_l.len() as u32);
+        writer.u(self.all_r.len() as u32);
+        writer.f(self.prepared_sr);
+        for comb in self.combs_l.iter().chain(self.combs_r.iter()) {
+            comb.capture(&mut writer);
+        }
+        for allpass in self.all_l.iter().chain(self.all_r.iter()) {
+            allpass.capture(&mut writer);
+        }
+        writer.finish()
+    }
+
+    fn restore_state(&mut self, state: &EffectState) -> Result<(), Error> {
+        let mut reader = Reader::new(state);
+        let n_comb_l = reader.u().ok_or_else(bad_state)? as usize;
+        let n_comb_r = reader.u().ok_or_else(bad_state)? as usize;
+        let n_all_l = reader.u().ok_or_else(bad_state)? as usize;
+        let n_all_r = reader.u().ok_or_else(bad_state)? as usize;
+        let prepared_sr = reader.f().ok_or_else(bad_state)?;
+        if n_comb_l == 0 && n_comb_r == 0 && n_all_l == 0 && n_all_r == 0 {
+            if !reader.finish() {
+                return Err(bad_state());
+            }
+            self.combs_l.clear();
+            self.combs_r.clear();
+            self.all_l.clear();
+            self.all_r.clear();
+            self.prepared_sr = prepared_sr;
+            return Ok(());
+        }
+        let mut combs_l = Vec::with_capacity(n_comb_l);
+        let mut combs_r = Vec::with_capacity(n_comb_r);
+        let mut all_l = Vec::with_capacity(n_all_l);
+        let mut all_r = Vec::with_capacity(n_all_r);
+        for _ in 0..n_comb_l {
+            let mut comb = Comb::new(2);
+            comb.restore(&mut reader).ok_or_else(bad_state)?;
+            combs_l.push(comb);
+        }
+        for _ in 0..n_comb_r {
+            let mut comb = Comb::new(2);
+            comb.restore(&mut reader).ok_or_else(bad_state)?;
+            combs_r.push(comb);
+        }
+        for _ in 0..n_all_l {
+            let mut allpass = Allpass::new(2);
+            allpass.restore(&mut reader).ok_or_else(bad_state)?;
+            all_l.push(allpass);
+        }
+        for _ in 0..n_all_r {
+            let mut allpass = Allpass::new(2);
+            allpass.restore(&mut reader).ok_or_else(bad_state)?;
+            all_r.push(allpass);
+        }
+        if !reader.finish() {
+            return Err(bad_state());
+        }
+        self.combs_l = combs_l;
+        self.combs_r = combs_r;
+        self.all_l = all_l;
+        self.all_r = all_r;
+        self.prepared_sr = prepared_sr;
+        Ok(())
+    }
+}
+
+fn bad_state() -> Error {
+    Error::StateMismatch {
+        effect: "reverb".into(),
+        reason: "snapshot does not match a reverb".into(),
     }
 }

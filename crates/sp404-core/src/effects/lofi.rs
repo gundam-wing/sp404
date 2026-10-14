@@ -1,6 +1,8 @@
 use crate::dsp::{sanitize, wet_dry};
 use crate::effect::{impl_effect_accessors, Effect};
 use crate::param::{EffectSchema, ParamScale, ParamSchema};
+use crate::state::{EffectState, Reader, Writer};
+use crate::Error;
 
 const NONE: &[&str] = &[];
 
@@ -107,5 +109,34 @@ impl Effect for Lofi {
         self.hold_l = 0.0;
         self.hold_r = 0.0;
         self.counter = 0;
+    }
+
+    fn capture_state(&self) -> EffectState {
+        let mut writer = Writer::new();
+        writer.f(self.hold_l);
+        writer.f(self.hold_r);
+        writer.u(self.counter);
+        writer.finish()
+    }
+
+    fn restore_state(&mut self, state: &EffectState) -> Result<(), Error> {
+        let mut reader = Reader::new(state);
+        let hold_l = reader.f().ok_or_else(bad_state)?;
+        let hold_r = reader.f().ok_or_else(bad_state)?;
+        let counter = reader.u().ok_or_else(bad_state)?;
+        if !reader.finish() {
+            return Err(bad_state());
+        }
+        self.hold_l = hold_l;
+        self.hold_r = hold_r;
+        self.counter = counter;
+        Ok(())
+    }
+}
+
+fn bad_state() -> Error {
+    Error::StateMismatch {
+        effect: "lofi".into(),
+        reason: "snapshot does not match a lo-fi effect".into(),
     }
 }

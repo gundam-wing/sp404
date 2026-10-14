@@ -2,6 +2,8 @@ use crate::dsp::db_to_lin;
 use crate::dsp::OnePole;
 use crate::effect::{impl_effect_accessors, Effect};
 use crate::param::{EffectSchema, ParamScale, ParamSchema};
+use crate::state::{EffectState, Reader, Writer};
+use crate::Error;
 
 const NONE: &[&str] = &[];
 
@@ -149,5 +151,36 @@ impl Effect for Isolator {
         self.high_l.reset();
         self.low_r.reset();
         self.high_r.reset();
+    }
+
+    fn capture_state(&self) -> EffectState {
+        let mut writer = Writer::new();
+        for pole in [&self.low_l, &self.high_l, &self.low_r, &self.high_r] {
+            writer.f(pole.z());
+        }
+        writer.finish()
+    }
+
+    fn restore_state(&mut self, state: &EffectState) -> Result<(), Error> {
+        let mut reader = Reader::new(state);
+        let mut values = [0.0; 4];
+        for slot in &mut values {
+            *slot = reader.f().ok_or_else(bad_state)?;
+        }
+        if !reader.finish() {
+            return Err(bad_state());
+        }
+        self.low_l.set_z(values[0]);
+        self.high_l.set_z(values[1]);
+        self.low_r.set_z(values[2]);
+        self.high_r.set_z(values[3]);
+        Ok(())
+    }
+}
+
+fn bad_state() -> Error {
+    Error::StateMismatch {
+        effect: "isolator".into(),
+        reason: "snapshot does not match an isolator".into(),
     }
 }
