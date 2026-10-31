@@ -2499,6 +2499,7 @@ dependencies = [
  "serde_json",
  "sp404-analyze",
  "sp404-core",
+ "sp404-song",
 ]
 
 [[package]]
@@ -2507,6 +2508,15 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "sp404-song"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sp404-core",
 ]
 
 [[package]]
