@@ -237,6 +237,8 @@ curl -s -H "Authorization: Bearer dev" \
 
 The same audio, style, seed, bars, and mode produce the same plan JSON. Analysis uses the `sp404 analyze` defaults.
 
+Container build and run steps, including `SP404_BIND=0.0.0.0:4040`, are in [DEPLOY.md](DEPLOY.md). The image does not include `sp404-ui`.
+
 ### Extending the set
 
 Implement `Effect` and either `EffectChain::push` the box, or `Registry::register` it under a schema. A later registration with the same id shadows the built-in, so a host can replace `filter` without changing the JSON shape. `Registry::builtin()` is what the CLI and UI use.
