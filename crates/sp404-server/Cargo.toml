@@ -1,0 +1,27 @@
+[package]
+name = "sp404-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "HTTP API that analyzes, chops, generates, and renders a Pad404 arrangement."
+
+[[bin]]
+name = "sp404-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.7.9", features = ["multipart"] }
+# Newer hyper-util and encoding_rs releases need a Rust newer than this workspace.
+encoding_rs = "=0.8.35"
+hyper-util = "=0.1.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sp404-analyze = { path = "../sp404-analyze" }
+sp404-core = { path = "../sp404-core" }
+sp404-song = { path = "../sp404-song" }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+sp404-core = { path = "../sp404-core" }
+tower = { version = "0.5", features = ["util"] }

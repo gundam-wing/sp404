@@ -5,6 +5,7 @@ members = [
     "crates/sp404-analyze",
     "crates/sp404-song",
     "crates/sp404-cli",
+    "crates/sp404-server",
     "crates/sp404-ui",
 ]
 

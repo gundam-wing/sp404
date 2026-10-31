@@ -12,6 +12,7 @@ The point of the layout is that the sound is a library. The window is only one c
 | `sp404-analyze` | Onsets, tempo, key, and slices. Native-only. Not a dependency of `sp404-core` or the UI. |
 | `sp404-song` | Chop labeled slices and generate arrangement JSON. Native-only. Not a dependency of `sp404-core` or the UI. |
 | `sp404-cli` | `sp404` binary. Catalog, analyze, chop, generate, and render. |
+| `sp404-server` | HTTP API over analyze, chop, generate, and render. Not a dependency of `sp404-core` or the UI. |
 | `sp404-ui` | Native egui window and `cpal` output. This is the only crate that talks to the sound device. |
 
 ```mermaid
@@ -25,6 +26,9 @@ flowchart LR
   analysis --> analyze["sp404-analyze"]
   analysis --> song["sp404-song"]
   song --> plan
+  server["sp404-server"] --> analyze
+  server --> song
+  server --> core
   ui["sp404-ui"] --> core
   core --> effects["Effect chain"]
   ui --> device["cpal output"]
@@ -193,6 +197,46 @@ The bar is split into intro, A, B, break, and outro (weights 1, 3, 3, 2, 1). Tho
 
 Slice paths in the arrangement are relative to the plan file, which is what `sp404 plan render` already inlines.
 
+### HTTP server
+
+`sp404-server` is a separate binary. It calls `sp404-analyze`, `sp404-song`, and `Arrangement::render` in process. It does not shell out, and `sp404-core` does not depend on it. The UI build does not either. Jobs are kept in memory; restarting the process drops them.
+
+`SP404_API_KEY` is required. The process exits if it is missing or empty. Every route except `GET /health` needs `Authorization: Bearer <key>`. A missing or wrong key is `401`.
+
+```bash
+SP404_API_KEY=dev cargo run -p sp404-server
+```
+
+The listen address is `SP404_BIND`, default `127.0.0.1:4040`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SP404_API_KEY` | required | Bearer token. |
+| `SP404_BIND` | `127.0.0.1:4040` | Listen address. |
+| `SP404_MAX_BARS` | `64` | Largest `bars` value. Over the limit is `413`. |
+| `SP404_MAX_UPLOAD_BYTES` | `20971520` (20 MiB) | Maximum request body. Over the limit is `413`. |
+| `SP404_MAX_CONCURRENT_JOBS` | `2` | Jobs accepted at once, including ones still queued. `0` accepts none. At the cap, `POST /jobs` is `429`. |
+
+```bash
+curl -s localhost:4040/health
+curl -s -H "Authorization: Bearer dev" \
+  -F style=house -F seed=1 -F bars=8 -F mode=transient \
+  -F audio=@loop.wav \
+  localhost:4040/jobs
+```
+
+`mode` is `transient`, `beat-grid`, or `phrase`. For `phrase`, optional form field `phrase_bars` is `1`, `2`, or `4` (default `1`). `style` is `house`, `boom-bap`, or `techno`.
+
+| Route | Auth | Result |
+| --- | --- | --- |
+| `GET /health` | no | `{"ok": true}` |
+| `POST /jobs` | yes | `202` and a job id. Multipart fields: `audio`, `style`, `seed`, `bars`, `mode`, and `phrase_bars` when the mode is `phrase`. |
+| `GET /jobs/:id` | yes | `queued`, `running`, `succeeded`, or `failed`, plus the request parameters and `error` when failed. Unknown ids are `404`. |
+| `GET /jobs/:id/plan` | yes | Arrangement JSON once the job has succeeded. Before that, `409`. |
+| `GET /jobs/:id/audio` | yes | Rendered `audio/wav` once the job has succeeded. Before that, `409`. |
+
+The same audio, style, seed, bars, and mode produce the same plan JSON. Analysis uses the `sp404 analyze` defaults.
+
 ### Extending the set
 
 Implement `Effect` and either `EffectChain::push` the box, or `Registry::register` it under a schema. A later registration with the same id shadows the built-in, so a host can replace `filter` without changing the JSON shape. `Registry::builtin()` is what the CLI and UI use.
@@ -260,6 +304,7 @@ cargo run -p sp404-cli -- plan render examples/plans/filter-sweep.json --output 
 cargo run -p sp404-cli -- analyze loop.wav
 cargo run -p sp404-cli -- chop loop.wav --output chops --mode transient
 cargo run -p sp404-cli -- generate --manifest chops/manifest.json --style house --seed 1 --bars 8 --output song.json
+SP404_API_KEY=dev cargo run -p sp404-server
 cargo run -p sp404-ui
 ```
 
@@ -295,6 +340,8 @@ If no output device is present, the window still opens and a silent clock keeps 
 - Euclidean patterns, swing, and a seeded arrangement replay byte-for-byte
 - generated arrangement JSON loads through `Arrangement` and renders finite audio on the existing plan path
 - `sp404 chop` and `sp404 generate` write a manifest and a plan, and `sp404 plan render` bounces that plan
+- `sp404-server` rejects a missing API key, a request over the bar limit, and a request at the concurrency cap
+- the same upload, style, seed, bars, and mode return the same arrangement JSON, and the audio route is a WAV
 
 ## Next steps
 
