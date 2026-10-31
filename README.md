@@ -9,7 +9,8 @@ The point of the layout is that the sound is a library. The window is only one c
 | Crate | Role |
 | --- | --- |
 | `sp404-core` | Effects, chains, the 16-pad engine, offline render, WAV encode/decode. No threads, devices, or filesystem. |
-| `sp404-cli` | `sp404` binary. Prints the catalog and renders a WAV from a chain or an arrangement. |
+| `sp404-analyze` | Onsets, tempo, key, and slices. Native-only. Not a dependency of `sp404-core` or the UI. |
+| `sp404-cli` | `sp404` binary. Prints the catalog, analyzes a WAV, and renders a WAV from a chain or an arrangement. |
 | `sp404-ui` | Native egui window and `cpal` output. This is the only crate that talks to the sound device. |
 
 ```mermaid
@@ -17,8 +18,10 @@ flowchart LR
   agent["Agent or CLI"] --> catalog["catalog JSON"]
   agent --> chain["ChainDesc JSON"]
   agent --> plan["Arrangement JSON"]
+  agent --> analysis["Analysis JSON"]
   chain --> core["sp404-core"]
   plan --> core
+  analysis --> analyze["sp404-analyze"]
   ui["sp404-ui"] --> core
   core --> effects["Effect chain"]
   ui --> device["cpal output"]
@@ -144,6 +147,21 @@ sp404 plan render examples/plans/dub-throw.json --output throw.wav --start-beat 
 
 [`examples/plans/filter-sweep.json`](examples/plans/filter-sweep.json) is a four-beat pattern with a low-pass opening across the bar. [`examples/plans/dub-throw.json`](examples/plans/dub-throw.json) keeps the snare delay closed until the last hit, then opens the mix. From Rust, `Arrangement::from_json` and `Arrangement::render(start, end)` are the same calls. Neither opens a file.
 
+### Analysis
+
+`sp404-analyze` reads mono samples and returns a deterministic document: tempo, beat times, onsets, musical key, and slice boundaries. The same file and the same options always produce the same JSON. The crate is native-only. `sp404-core` does not depend on it, and neither does `sp404-ui`, so `cargo build -p sp404-core --target wasm32-unknown-unknown` still does not link the FFT.
+
+Onsets are spectral flux. Each onset is snapped to a nearby zero crossing, and the slice that starts there records a short fade-in and fade-out for a later chop. This command does not write chopped audio. Tempo is an autocorrelation of the onset strength, followed by Ellis-style dynamic-programming beat tracking. A half-time / double-time guard compares that estimate with the spacing of the onsets, so a steady click track is not reported at the wrong octave. Key is peak-picked chroma correlated with the Krumhansl–Schmuckler profiles. The document names the key and gives a confidence from 0 to 1. Silence is `"unknown"` with confidence 0.
+
+```bash
+sp404 analyze loop.wav
+sp404 analyze loop.wav --hop-size 512 --fft-size 2048 --min-bpm 70 --max-bpm 160 --fade-ms 5 --zero-cross-ms 20
+```
+
+JSON goes to stdout. A one-line summary goes to stderr. The fields are `sample_rate`, `duration`, `bpm`, `beat_times`, `onset_times`, `key`, `key_confidence`, and `slices` (`start`, `end`, `fade_in`, `fade_out`). Times are seconds. `bpm` is 0 when no period could be estimated. Defaults are hop 512, FFT 2048, tempo 60..180 BPM, fade 5 ms, and a 20 ms zero-cross window. The FFT size is a power of two from 32 to 65536, and the hop cannot be larger than the FFT. Stereo files are mixed to mono before analysis.
+
+From Rust the same call is `sp404_analyze::analyze`. The core WAV decoder stays in `sp404-core`; the CLI is what opens the file.
+
 ### Extending the set
 
 Implement `Effect` and either `EffectChain::push` the box, or `Registry::register` it under a schema. A later registration with the same id shadows the built-in, so a host can replace `filter` without changing the JSON shape. `Registry::builtin()` is what the CLI and UI use.
@@ -208,6 +226,7 @@ cargo test --workspace
 cargo run -p sp404-cli -- catalog
 cargo run -p sp404-cli -- render --demo kick --chain examples/chains/dub-delay.json --output kick.wav
 cargo run -p sp404-cli -- plan render examples/plans/filter-sweep.json --output sweep.wav
+cargo run -p sp404-cli -- analyze loop.wav
 cargo run -p sp404-ui
 ```
 
@@ -234,6 +253,10 @@ If no output device is present, the window still opens and a silent clock keeps 
 - the UI capture path appends only while armed, caps a take at 60 seconds, and a resample through the session clock becomes a pad sample
 - effect memory snapshots restore bit-exactly
 - `render(plan, start..end)` matches a full render for fresh chunking, cursor chunking, checkpoint boundaries, and random slices in shuffled order
+- spectral-flux onsets on impulses land near the clicks and snap onto a zero crossing
+- a regular click track reports BPM in the neighborhood of the clicks, not the half-time or double-time octave
+- Krumhansl–Schmuckler matching prefers the profile of a constructed major triad
+- `sp404 analyze` prints that JSON document, and a second run of the same file matches the first
 
 ## Next steps
 
