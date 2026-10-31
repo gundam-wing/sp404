@@ -1,0 +1,12 @@
+[package]
+name = "sp404-song"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Chop analyzed loops into slices and generate Pad404 arrangements."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sp404-core = { path = "../sp404-core" }

@@ -10,7 +10,8 @@ The point of the layout is that the sound is a library. The window is only one c
 | --- | --- |
 | `sp404-core` | Effects, chains, the 16-pad engine, offline render, WAV encode/decode. No threads, devices, or filesystem. |
 | `sp404-analyze` | Onsets, tempo, key, and slices. Native-only. Not a dependency of `sp404-core` or the UI. |
-| `sp404-cli` | `sp404` binary. Prints the catalog, analyzes a WAV, and renders a WAV from a chain or an arrangement. |
+| `sp404-song` | Chop labeled slices and generate arrangement JSON. Native-only. Not a dependency of `sp404-core` or the UI. |
+| `sp404-cli` | `sp404` binary. Catalog, analyze, chop, generate, and render. |
 | `sp404-ui` | Native egui window and `cpal` output. This is the only crate that talks to the sound device. |
 
 ```mermaid
@@ -22,6 +23,8 @@ flowchart LR
   chain --> core["sp404-core"]
   plan --> core
   analysis --> analyze["sp404-analyze"]
+  analysis --> song["sp404-song"]
+  song --> plan
   ui["sp404-ui"] --> core
   core --> effects["Effect chain"]
   ui --> device["cpal output"]
@@ -162,6 +165,34 @@ JSON goes to stdout. A one-line summary goes to stderr. The fields are `sample_r
 
 From Rust the same call is `sp404_analyze::analyze`. The core WAV decoder stays in `sp404-core`; the CLI is what opens the file.
 
+### Chop and generate
+
+`sp404-song` turns that analysis into slice audio and an arrangement. It does not link into `sp404-core` or the UI. Core still has no FFT, no filesystem, and no analysis code. The arrangement it writes is the existing plan document: pads, triggers, and keyframe automation. `sp404 plan render` plays it.
+
+```bash
+sp404 chop loop.wav --output chops --mode transient
+sp404 chop loop.wav --output chops --mode beat-grid
+sp404 chop loop.wav --output chops --mode phrase --phrase-bars 2
+sp404 generate --manifest chops/manifest.json --style house --seed 1 --bars 8 --output song.json
+sp404 plan render song.json --output song.wav
+```
+
+`chop` runs `analyze` on the WAV (the same flags as `analyze` apply) and writes `manifest.json` plus `slices/000.wav` and so on. Paths in the manifest are relative to that file.
+
+- `transient` keeps each analyzed slice and the `fade_in` / `fade_out` already on it. The fades are linear ramps applied to the WAV.
+- `beat-grid` cuts from each `beat_times` entry to the next, and from the last beat to the end of the file.
+- `phrase` cuts 1, 2, or 4 bars. A bar is four beats at the analyzed tempo. The grid starts at the first beat, or at the start of the file when no beat was found. `--phrase-bars` defaults to 1.
+
+Each slice gets one label: `kick`, `snare`, `hat`, or `melodic`. The rule is fixed, so the same samples always get the same label. It is a heuristic, not a classifier. Near-silence is melodic. A kick is mostly energy below about 150 Hz with few zero crossings. A hat is short, with dense zero crossings and a quiet low band. A snare is a short noisy hit that is not low enough for a kick or thin enough for a hat. Sustained tones, and anything left over, are melodic.
+
+`generate` reads the manifest. `--style` is `house`, `boom-bap`, or `techno`. `--seed` and `--bars` are required. The same manifest, style, seed, and bar count write the same JSON.
+
+Patterns are Euclidean on a 16th-note grid. House is a four-on-the-floor kick, a backbeat snare, and offbeat hats, with the first 16th of each pair taking 56.25% of the 8th (light swing). Boom-bap uses a syncopated kick and the same backbeat, with hats swung to 62.5%. Techno keeps the four-on-the-floor kick and runs straight 16th hats, swing 50%. The seed picks which slice of a role plays a hit, rotates the hat and melodic patterns, and jitters gain. Kick and snare grids stay on the template. Up to four slices of each label land on the 16 pads: kicks on pads 0–3, snares on 4–7, hats on 8–11, and melodic slices on 12–15.
+
+The bar is split into intro, A, B, break, and outro (weights 1, 3, 3, 2, 1). Those edges are keyframes. Master gain fades in through the intro, dips in the break, and fades out through the outro. A bus low-pass opens across A and B, closes for the break, and closes again at the end. Melodic pad volume follows the same sections. Hits thin out to match: the intro is kick and hat, the break drops the kick, and the outro drops the snare.
+
+Slice paths in the arrangement are relative to the plan file, which is what `sp404 plan render` already inlines.
+
 ### Extending the set
 
 Implement `Effect` and either `EffectChain::push` the box, or `Registry::register` it under a schema. A later registration with the same id shadows the built-in, so a host can replace `filter` without changing the JSON shape. `Registry::builtin()` is what the CLI and UI use.
@@ -227,6 +258,8 @@ cargo run -p sp404-cli -- catalog
 cargo run -p sp404-cli -- render --demo kick --chain examples/chains/dub-delay.json --output kick.wav
 cargo run -p sp404-cli -- plan render examples/plans/filter-sweep.json --output sweep.wav
 cargo run -p sp404-cli -- analyze loop.wav
+cargo run -p sp404-cli -- chop loop.wav --output chops --mode transient
+cargo run -p sp404-cli -- generate --manifest chops/manifest.json --style house --seed 1 --bars 8 --output song.json
 cargo run -p sp404-ui
 ```
 
@@ -257,6 +290,11 @@ If no output device is present, the window still opens and a silent clock keeps 
 - a regular click track reports BPM in the neighborhood of the clicks, not the half-time or double-time octave
 - Krumhansl–Schmuckler matching prefers the profile of a constructed major triad
 - `sp404 analyze` prints that JSON document, and a second run of the same file matches the first
+- chop modes: onset slices keep their fades, beat-grid boundaries follow beat times, and phrase slices span 1, 2, or 4 bars
+- slice labels stay put for a low tone, noise burst, noisy snare, sustained tone, and silence
+- Euclidean patterns, swing, and a seeded arrangement replay byte-for-byte
+- generated arrangement JSON loads through `Arrangement` and renders finite audio on the existing plan path
+- `sp404 chop` and `sp404 generate` write a manifest and a plan, and `sp404 plan render` bounces that plan
 
 ## Next steps
 

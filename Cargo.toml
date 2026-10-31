@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/sp404-core",
     "crates/sp404-analyze",
+    "crates/sp404-song",
     "crates/sp404-cli",
     "crates/sp404-ui",
 ]
