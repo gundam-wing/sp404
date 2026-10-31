@@ -11,6 +11,7 @@ FROM rust:1.83.0-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY examples ./examples
 RUN cargo build --locked --release -p sp404-server
 
 FROM debian:bookworm-slim
