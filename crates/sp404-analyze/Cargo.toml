@@ -1,0 +1,12 @@
+[package]
+name = "sp404-analyze"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Rust-native onset, tempo, key, and slice analysis for Pad404."
+
+[dependencies]
+rustfft = "6.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

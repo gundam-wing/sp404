@@ -4,12 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Headless catalog and WAV render tool for the Pad404 sampler."
+description = "Headless catalog, analysis, and WAV render tool for the Pad404 sampler."
 
 [[bin]]
 name = "sp404"
 path = "src/main.rs"
 
 [dependencies]
+sp404-analyze = { path = "../sp404-analyze" }
 sp404-core = { path = "../sp404-core" }
 serde_json = "1"
